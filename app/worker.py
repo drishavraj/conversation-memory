@@ -1,4 +1,6 @@
 import argparse
+import signal
+from threading import Event
 from datetime import timedelta
 from sqlalchemy import select, update, delete
 from .database import make_engine, session_factory
@@ -26,7 +28,7 @@ def safe_error(error):
 def process_one(sessions, provider):
     # Conditional update provides a single claimant even with concurrent pollers.
     with sessions() as db:
-        job = db.scalar(select(Job).where(Job.status == "queued").order_by(Job.id).limit(1))
+        job = db.scalar(select(Job).join(Entry, Entry.id == Job.entry_id).where(Job.status == "queued").order_by(Entry.uploaded_at, Job.id).limit(1))
         if not job:
             return False
         job_id = job.id
@@ -75,15 +77,43 @@ def recover(sessions):
             db.get(Entry, job.entry_id).status = "queued"
         db.commit()
 
+def run_forever(sessions, provider, stop, poll_seconds=5):
+    if poll_seconds < 1 or poll_seconds > 60:
+        raise ValueError("Poll interval must be between 1 and 60 seconds")
+    print("Worker started; checking durable queue", flush=True)
+    while not stop.is_set():
+        try:
+            processed = process_one(sessions, provider)
+        except Exception:
+            # Database failures must not leak connection URLs or transcript content.
+            print("Worker unavailable: database_or_processing_error", flush=True)
+            processed = False
+        if not processed:
+            stop.wait(poll_seconds)
+    print("Worker stopped", flush=True)
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--recover", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--recover", action="store_true")
+    mode.add_argument("--loop", action="store_true")
+    parser.add_argument("--poll-seconds", type=int, default=5, choices=range(1, 61))
     args = parser.parse_args()
-    sessions = session_factory(make_engine())
-    if args.recover:
-        recover(sessions)
-    else:
-        process_one(sessions, GeminiProvider())
+    engine = make_engine()
+    sessions = session_factory(engine)
+    try:
+        if args.recover:
+            recover(sessions)
+        elif args.loop:
+            stop = Event()
+            for signum in (signal.SIGTERM, signal.SIGINT):
+                signal.signal(signum, lambda *_: stop.set())
+            run_forever(sessions, GeminiProvider(), stop, args.poll_seconds)
+        else:
+            if not process_one(sessions, GeminiProvider()):
+                print("No queued job available", flush=True)
+    finally:
+        engine.dispose()
 
 if __name__ == "__main__":
     main()
