@@ -6,6 +6,7 @@ from sqlalchemy import select, func, or_
 from .models import Knowledge, Entry
 from .knowledge_api import serialize
 from .provider import GeminiProvider
+from .worker import safe_error
 
 class Question(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -66,8 +67,9 @@ def router_for(authorize, db, answer_provider=None):
             allowed={r['id'] for r in records}
             if any(not set(claim.source_ids)<=allowed for claim in result.claims):
                 raise ValueError("Invalid citation")
-        except Exception:
-            raise HTTPException(503,"Answer generation unavailable; try again later")
+        except Exception as error:
+            code = "invalid_citation" if isinstance(error, ValueError) and str(error) == "Invalid citation" else safe_error(error)
+            raise HTTPException(503, detail={"message": "Answer generation unavailable", "error": code})
         cited={source for claim in result.claims for source in claim.source_ids}
         return {"scope":scope,"retrieval":"keyword","status":"answered" if result.claims else "no_evidence","claims":[c.model_dump() for c in result.claims],"sources":[r for r in records if r['id'] in cited]}
 
