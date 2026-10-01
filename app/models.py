@@ -19,6 +19,7 @@ class Entry(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     title: Mapped[str] = mapped_column(String(200))
     original_text: Mapped[str] = mapped_column(Text)
+    fingerprint: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
     theme_id: Mapped[str | None] = mapped_column(ForeignKey("themes.id"), nullable=True)
     event_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
@@ -56,6 +57,7 @@ class Knowledge(Base):
     certainty: Mapped[str] = mapped_column(String(32))
     owner: Mapped[str | None] = mapped_column(String(200), nullable=True)
     due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    date_basis: Mapped[str] = mapped_column(String(32), default="unknown")
     status: Mapped[str] = mapped_column(String(32), default="active")
 
     origin: Mapped[str] = mapped_column(String(32), default="ai_extracted")

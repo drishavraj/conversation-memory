@@ -7,6 +7,10 @@ from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
+from fastapi.responses import JSONResponse
+from fastapi.encoders import jsonable_encoder
+from .fingerprint import fingerprint
 from redis import Redis
 from .database import make_engine, session_factory
 from .models import Entry, Job, Theme, ProcessedEntry, Knowledge
@@ -79,12 +83,23 @@ def create_app(database_url=None, owner_token=None, answer_provider=None):
 
     @app.post("/api/entries/text", status_code=201, dependencies=[Depends(authorize)])
     def ingest(payload: TextInput, session=Depends(db)):
-        entry = Entry(title=payload.title, original_text=payload.text, theme_id=payload.theme_id, event_at=payload.event_at)
-        session.add(entry)
-        session.flush()
-        session.add(Job(entry_id=entry.id))
-        session.commit()
-        return entry_dict(entry)
+        digest = fingerprint(payload.text, payload.theme_id, payload.event_at)
+        existing = session.scalar(select(Entry).where(Entry.fingerprint == digest))
+        if existing:
+            return JSONResponse(status_code=200,content=jsonable_encoder({**entry_dict(existing),"duplicate":True}))
+        entry = Entry(title=payload.title, original_text=payload.text, theme_id=payload.theme_id, event_at=payload.event_at, fingerprint=digest)
+        try:
+            session.add(entry)
+            session.flush()
+            session.add(Job(entry_id=entry.id))
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+            existing = session.scalar(select(Entry).where(Entry.fingerprint == digest))
+            if existing:
+                return JSONResponse(status_code=200,content=jsonable_encoder({**entry_dict(existing),"duplicate":True}))
+            raise
+        return {**entry_dict(entry),"duplicate":False}
 
     @app.get("/api/entries", dependencies=[Depends(authorize)])
     def entries(theme_id: Literal["personal", "side-projects", "office"] | None = None, limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0), session=Depends(db)):
@@ -120,7 +135,7 @@ def create_app(database_url=None, owner_token=None, answer_provider=None):
             raise HTTPException(404, "Entry not found")
         result = session.get(ProcessedEntry, entry_id)
         rows = session.scalars(select(Knowledge).where(Knowledge.entry_id == entry_id)).all()
-        return {"english_text":result.english_text if result else None, "summary":result.summary if result else None, "suggested_theme":result.suggested_theme if result else None, "items":[{"id":r.id,"kind":r.kind,"text":r.text,"theme_id":r.theme_id,"certainty":r.certainty,"owner":r.owner,"due_date":r.due_date,"evidence":r.evidence,"evidence_start":r.evidence_start,"evidence_end":r.evidence_end,"source_entry_id":r.entry_id,"status":r.status,"origin":r.origin,"version":r.version} for r in rows]}
+        return {"english_text":result.english_text if result else None, "summary":result.summary if result else None, "suggested_theme":result.suggested_theme if result else None, "items":[{"id":r.id,"kind":r.kind,"text":r.text,"theme_id":r.theme_id,"certainty":r.certainty,"owner":r.owner,"due_date":r.due_date,"date_basis":r.date_basis,"evidence":r.evidence,"evidence_start":r.evidence_start,"evidence_end":r.evidence_end,"source_entry_id":r.entry_id,"status":r.status,"origin":r.origin,"version":r.version} for r in rows]}
 
     from .knowledge_api import router_for
     app.include_router(router_for(authorize, db))

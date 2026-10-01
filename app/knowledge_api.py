@@ -32,7 +32,7 @@ class Correction(BaseModel):
         return self
 
 def serialize(row):
-    return {"id":row.id,"kind":row.kind,"text":row.text,"theme_id":row.theme_id,"certainty":row.certainty,"owner":row.owner,"due_date":row.due_date.isoformat() if row.due_date else None,"status":row.status,"origin":row.origin,"version":row.version,"source_entry_id":row.entry_id,"evidence":row.evidence,"evidence_start":row.evidence_start,"evidence_end":row.evidence_end}
+    return {"id":row.id,"kind":row.kind,"text":row.text,"theme_id":row.theme_id,"certainty":row.certainty,"owner":row.owner,"due_date":row.due_date.isoformat() if row.due_date else None,"date_basis":row.date_basis,"status":row.status,"origin":row.origin,"version":row.version,"source_entry_id":row.entry_id,"evidence":row.evidence,"evidence_start":row.evidence_start,"evidence_end":row.evidence_end}
 
 def router_for(authorize, db):
     router = APIRouter(prefix="/api", dependencies=[Depends(authorize)])
@@ -58,6 +58,8 @@ def router_for(authorize, db):
         # Mark semantic edits as user corrections; completing an action preserves provenance.
         if set(changes)-{"status"}:
             changes["origin"]="user_corrected"
+        if "due_date" in changes:
+            changes["date_basis"]="explicit" if changes["due_date"] else "unknown"
         changes["version"]=payload.expected_version+1
         result=session.execute(update(Knowledge).where(Knowledge.id==item_id,Knowledge.version==payload.expected_version).values(**changes).execution_options(synchronize_session=False))
         if result.rowcount!=1:

@@ -77,3 +77,12 @@ POST /api/chat with {"question":"What was said about UAT?","theme_id":"office"}.
 Retrieval currently uses keyword overlap in active knowledge, not embeddings or full-transcript search. Corrected records are retrieved by current text rather than old evidence. Up to 200 recent candidates are considered and 12 provided to Gemini. This is a first answering endpoint, not the completed semantic-search MVP. It does not route pending-action questions automatically; use GET /api/actions for reliable structured action lists.
 
 Citation validation checks that cited IDs were supplied to the model, not semantic entailment or factual accuracy. Review source content and correction history. Live Gemini remains untested. 19 automated tests pass against SQLite with simulated providers.
+
+## Quality safeguards
+New text submissions are deduplicated by trimmed exact text, selected theme and UTC-normalized event timestamp (title does not affect identity). Matching submissions return HTTP 200 with duplicate:true and the existing ID; new entries return 201 with duplicate:false. Missing timestamps mean identical text in the same theme is treated as a duplicate. Supply a distinct event time for repeated conversations. This is exact-content detection, not semantic similarity.
+
+Migration 0004 fingerprints one canonical entry per existing duplicate group without deleting or modifying the others. Existing test duplicates remain searchable. Previously extracted objects are not reclassified automatically.
+
+Extraction prompt v2 distinguishes proposals from commitments. A tentative ownerless action is conservatively converted to a tentative decision. Date basis is explicit, relative, inferred or unknown. Inferred/unknown dates are not persisted as concrete deadlines. Bare weekday references should retain the weekday in text, leave due_date null and mark date_basis inferred. Semantic correctness still requires review. User-specified due-date corrections are marked explicit and audited.
+
+23 automated tests pass, including canonical timestamp deduplication, event distinction, date guards and preservation of legacy duplicate records. Live prompt quality needs verification after deployment.

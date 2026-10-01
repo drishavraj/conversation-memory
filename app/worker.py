@@ -52,7 +52,7 @@ def process_one(sessions, provider):
             db.add(ProcessedEntry(entry_id=entry_id, english_text=result.english_text, summary=result.summary, suggested_theme=result.suggested_theme, prompt_version=PROMPT_VERSION))
             for item in result.items:
                 start = source.index(item.evidence)
-                db.add(Knowledge(entry_id=entry_id, kind=item.kind, text=item.text, evidence=item.evidence, evidence_start=start, evidence_end=start+len(item.evidence), theme_id=item.theme_id or theme, certainty=item.certainty, owner=item.owner, due_date=item.due_date))
+                db.add(Knowledge(entry_id=entry_id, kind=item.kind, text=item.text, evidence=item.evidence, evidence_start=start, evidence_end=start+len(item.evidence), theme_id=item.theme_id or theme, certainty=item.certainty, owner=item.owner, due_date=item.due_date, date_basis=item.date_basis))
             db.get(Entry, entry_id).status = "ready"
             job.status, job.error, job.claimed_at = "completed", None, None
             db.commit()

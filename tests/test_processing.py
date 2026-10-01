@@ -45,7 +45,7 @@ def test_unsupported_evidence_fails_atomically(client,headers):
 
 def test_unanchored_due_date_rejected(client,headers):
     entry_id=save(client,headers)
-    result=json.loads(json.dumps(RESULT));result['items'][1]['due_date']='2026-10-02'
+    result=json.loads(json.dumps(RESULT));result['items'][1]['due_date']='2026-10-02';result['items'][1]['date_basis']='relative'
     process_one(session_factory(client.app.state.engine),Fake(result))
     assert client.get(f'/api/entries/{entry_id}',headers=headers).json()['status']=='failed'
 
