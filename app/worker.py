@@ -4,7 +4,24 @@ from sqlalchemy import select, update, delete
 from .database import make_engine, session_factory
 from .models import Entry, Job, Knowledge, ProcessedEntry, now
 from .extraction import Extraction, validate_evidence, PROMPT_VERSION
-from .provider import GeminiProvider
+from .provider import GeminiProvider, ProviderError
+from pydantic import ValidationError
+import httpx
+
+def safe_error(error):
+    if isinstance(error, ProviderError):
+        return error.code
+    if isinstance(error, httpx.TimeoutException):
+        return "gemini_timeout"
+    if isinstance(error, httpx.RequestError):
+        return "gemini_connection_failed"
+    if isinstance(error, ValidationError):
+        return "output_schema_invalid"
+    if isinstance(error, ValueError) and str(error) == "Unsupported evidence":
+        return "source_quote_mismatch"
+    if isinstance(error, ValueError) and str(error) == "Due date requires event time":
+        return "event_date_required"
+    return "processing_failed"
 
 def process_one(sessions, provider):
     # Conditional update provides a single claimant even with concurrent pollers.
@@ -39,11 +56,13 @@ def process_one(sessions, provider):
             db.get(Entry, entry_id).status = "ready"
             job.status, job.error, job.claimed_at = "completed", None, None
             db.commit()
-    except Exception:
+    except Exception as error:
+        code = safe_error(error)
+        print(f"Processing failed: {code}", flush=True)
         with sessions() as db:
             job = db.get(Job, job_id)
             if job.status == "processing" and job.attempts == claim_attempt:
-                job.status, job.error, job.claimed_at = "failed", "Processing failed; review configuration or output and retry.", None
+                job.status, job.error, job.claimed_at = "failed", code, None
                 db.get(Entry, entry_id).status = "failed"
                 db.commit()
     return True

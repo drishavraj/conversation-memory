@@ -99,7 +99,7 @@ def create_app(database_url=None, owner_token=None, answer_provider=None):
         if entry is None:
             raise HTTPException(404, "Entry not found")
         job = session.scalar(select(Job).where(Job.entry_id == entry_id))
-        return {**entry_dict(entry), "job": {"stage": job.stage, "status": job.status, "attempts": job.attempts} if job else None}
+        return {**entry_dict(entry), "job": {"stage": job.stage, "status": job.status, "attempts": job.attempts, "error": job.error} if job else None}
 
     @app.post("/api/entries/{entry_id}/retry", dependencies=[Depends(authorize)])
     def retry(entry_id: str, session=Depends(db)):

@@ -4,6 +4,11 @@ import re
 import httpx
 from .extraction import Extraction, SYSTEM_PROMPT
 
+class ProviderError(RuntimeError):
+    def __init__(self, code):
+        self.code = code
+        super().__init__("Provider request failed")
+
 class GeminiProvider:
     def __init__(self, key=None, model=None, transport=None):
         self.key = key or os.environ.get("GEMINI_API_KEY")
@@ -27,10 +32,10 @@ class GeminiProvider:
             response = client.post(f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent", headers={"x-goog-api-key":self.key}, json=payload)
         if response.status_code != 200:
             # Never put provider body or credentials in stored job errors.
-            raise RuntimeError("Provider request failed")
+            raise ProviderError(f"gemini_http_{response.status_code}")
         data = response.json()
         candidates = data.get("candidates", [])
         if not candidates or candidates[0].get("finishReason") != "STOP":
-            raise RuntimeError("Incomplete provider output")
+            raise ProviderError("gemini_incomplete_output")
         output = "".join(part.get("text", "") for part in candidates[0].get("content", {}).get("parts", []) if not part.get("thought"))
         return schema.model_validate_json(output)
