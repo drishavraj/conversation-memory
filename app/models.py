@@ -1,6 +1,6 @@
 from datetime import datetime, timezone, date
 from uuid import uuid4
-from sqlalchemy import String, Text, DateTime, ForeignKey, Date
+from sqlalchemy import String, Text, DateTime, ForeignKey, Date, LargeBinary, JSON
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 def now():
@@ -18,6 +18,10 @@ class Entry(Base):
     __tablename__ = "entries"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     title: Mapped[str] = mapped_column(String(200))
+    input_type: Mapped[str] = mapped_column(String(32), default="text")
+    event_local: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    index_status: Mapped[str] = mapped_column(String(32), default="pending")
+    index_error: Mapped[str | None] = mapped_column(String(64), nullable=True)
     original_text: Mapped[str] = mapped_column(Text)
     fingerprint: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
     theme_id: Mapped[str | None] = mapped_column(ForeignKey("themes.id"), nullable=True)
@@ -71,3 +75,23 @@ class KnowledgeChange(Base):
     after_json: Mapped[str] = mapped_column(Text)
     reason: Mapped[str] = mapped_column(Text)
     changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+class Asset(Base):
+    __tablename__ = "assets"
+    entry_id: Mapped[str] = mapped_column(ForeignKey("entries.id"), primary_key=True)
+    filename: Mapped[str] = mapped_column(String(200))
+    mime_type: Mapped[str] = mapped_column(String(100))
+    content: Mapped[bytes] = mapped_column(LargeBinary)
+    sha256: Mapped[str] = mapped_column(String(64))
+
+class SearchRecord(Base):
+    __tablename__ = "search_records"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    entry_id: Mapped[str] = mapped_column(ForeignKey("entries.id"), index=True)
+    knowledge_id: Mapped[str | None] = mapped_column(ForeignKey("knowledge.id"), nullable=True)
+    knowledge_version: Mapped[int | None] = mapped_column(nullable=True)
+    text: Mapped[str] = mapped_column(Text)
+    start: Mapped[int | None] = mapped_column(nullable=True)
+    end: Mapped[int | None] = mapped_column(nullable=True)
+    model: Mapped[str] = mapped_column(String(100))
+    vector: Mapped[list] = mapped_column(JSON)

@@ -35,7 +35,7 @@ class TextInput(BaseModel):
             raise ValueError("Include timezone offset in event_at")
         return value
 
-def create_app(database_url=None, owner_token=None, answer_provider=None):
+def create_app(database_url=None, owner_token=None, answer_provider=None, embedding_provider=None):
     token = owner_token or os.environ.get("OWNER_API_TOKEN", "")
     if len(token) < 32:
         raise RuntimeError("Set OWNER_API_TOKEN to at least 32 characters")
@@ -60,7 +60,7 @@ def create_app(database_url=None, owner_token=None, answer_provider=None):
             yield session
 
     def entry_dict(entry):
-        return {"id": entry.id, "title": entry.title, "original_text": entry.original_text, "theme_id": entry.theme_id, "classification_status": "selected" if entry.theme_id else "needs_review", "event_at": entry.event_at, "uploaded_at": entry.uploaded_at, "status": entry.status}
+        return {"id": entry.id, "title": entry.title, "original_text": entry.original_text, "theme_id": entry.theme_id, "classification_status": "selected" if entry.theme_id else "needs_review", "event_at": entry.event_at, "uploaded_at": entry.uploaded_at, "status": entry.status,"input_type":entry.input_type,"index_status":entry.index_status,"index_error":entry.index_error}
 
     @app.get("/health")
     def health():
@@ -87,7 +87,7 @@ def create_app(database_url=None, owner_token=None, answer_provider=None):
         existing = session.scalar(select(Entry).where(Entry.fingerprint == digest))
         if existing:
             return JSONResponse(status_code=200,content=jsonable_encoder({**entry_dict(existing),"duplicate":True}))
-        entry = Entry(title=payload.title, original_text=payload.text, theme_id=payload.theme_id, event_at=payload.event_at, fingerprint=digest)
+        entry = Entry(title=payload.title, original_text=payload.text, theme_id=payload.theme_id, event_at=payload.event_at, event_local=payload.event_at.isoformat() if payload.event_at else None, fingerprint=digest)
         try:
             session.add(entry)
             session.flush()
@@ -140,5 +140,7 @@ def create_app(database_url=None, owner_token=None, answer_provider=None):
     from .knowledge_api import router_for
     app.include_router(router_for(authorize, db))
     from .chat import router_for as chat_router
-    app.include_router(chat_router(authorize, db, answer_provider))
+    app.include_router(chat_router(authorize, db, answer_provider, embedding_provider))
+    from .uploads import router_for as upload_router
+    app.include_router(upload_router(authorize, db))
     return app

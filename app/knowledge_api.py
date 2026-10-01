@@ -68,6 +68,8 @@ def router_for(authorize, db):
         session.refresh(item)
         after=serialize(item)
         session.add(KnowledgeChange(knowledge_id=item_id,before_json=json.dumps(before),after_json=json.dumps(after),reason=payload.reason))
+        session.get(Entry,item.entry_id).index_status="pending"
+        session.get(Entry,item.entry_id).index_error=None
         session.commit()
         return after
 

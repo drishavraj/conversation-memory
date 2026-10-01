@@ -4,13 +4,18 @@ from threading import Event
 from datetime import timedelta
 from sqlalchemy import select, update, delete
 from .database import make_engine, session_factory
-from .models import Entry, Job, Knowledge, ProcessedEntry, now
+from .models import Entry, Job, Knowledge, ProcessedEntry, Asset, now
+from .documents import parse_document, DocumentError
+from pathlib import Path
+from datetime import datetime
 from .extraction import Extraction, validate_evidence, PROMPT_VERSION
 from .provider import GeminiProvider, ProviderError
 from pydantic import ValidationError
 import httpx
 
 def safe_error(error):
+    if isinstance(error, DocumentError):
+        return str(error)
     if isinstance(error, ProviderError):
         return error.code
     if isinstance(error, httpx.TimeoutException):
@@ -39,9 +44,26 @@ def process_one(sessions, provider):
         entry = db.get(Entry, job.entry_id)
         entry.status = "processing"
         source, theme, event_at, entry_id = entry.original_text, entry.theme_id, entry.event_at, entry.id
+        if entry.event_local:
+            event_at = datetime.fromisoformat(entry.event_local)
+        input_type = entry.input_type
         claim_attempt = job.attempts
         db.commit()
     try:
+        if not source and input_type in {"audio","document"}:
+            with sessions() as db:
+                asset=db.get(Asset,entry_id)
+                if asset is None:raise DocumentError("source_file_missing")
+                content,mime,filename=asset.content,asset.mime_type,asset.filename
+            source=provider.transcribe(content,mime) if input_type=="audio" else parse_document(content,Path(filename).suffix.lower())
+            if not source.strip() or len(source)>200000:raise DocumentError("transcript_empty_or_too_large")
+            # Checkpoint parsing/transcription before extraction; retries reuse it.
+            with sessions() as db:
+                current=db.get(Job,job_id)
+                if current.status!="processing" or current.attempts!=claim_attempt:return True
+                db.get(Entry,entry_id).original_text=source
+                current.stage="normalize"
+                db.commit()
         result = Extraction.model_validate(provider.extract(source, theme, event_at))
         validate_evidence(result, source, event_at)
         with sessions() as db:
@@ -84,6 +106,10 @@ def run_forever(sessions, provider, stop, poll_seconds=5):
     while not stop.is_set():
         try:
             processed = process_one(sessions, provider)
+            import os
+            if os.environ.get("EMBEDDING_MODEL"):
+                from .semantic import index_one, GeminiEmbeddings
+                processed = index_one(sessions, GeminiEmbeddings()) or processed
         except Exception:
             # Database failures must not leak connection URLs or transcript content.
             print("Worker unavailable: database_or_processing_error", flush=True)
