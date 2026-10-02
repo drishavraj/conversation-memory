@@ -1,0 +1,16 @@
+{
+  "name": "conversation-memory-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.57.4"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.10",
+    "playwright": "1.51.1"
+  }
+}

@@ -1,5 +1,9 @@
 import os
 import secrets
+from pathlib import Path
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from .browser_auth import BrowserAuth
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Literal
@@ -50,10 +54,44 @@ def create_app(database_url=None, owner_token=None, answer_provider=None, embedd
     app = FastAPI(title="Conversation Memory", lifespan=lifespan)
     app.state.engine = engine
     security = HTTPBearer(auto_error=False)
+    browser_auth = BrowserAuth()
+    legacy_enabled = os.environ.get("ALLOW_OWNER_API_TOKEN", "false" if browser_auth.configured else "true").lower() == "true"
+
+    @app.middleware("http")
+    async def browser_headers(request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["X-Frame-Options"] = "DENY"
+        if request.url.path.startswith("/api/") or request.url.path == "/":
+            response.headers["Cache-Control"] = "no-store"
+        if request.url.path == "/":
+            origin = browser_auth.url if browser_auth.configured else ""
+            response.headers["Content-Security-Policy"] = f"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' {origin}; media-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+        return response
 
     def authorize(credentials: HTTPAuthorizationCredentials | None = Depends(security)):
-        if credentials is None or not secrets.compare_digest(credentials.credentials, token):
+        if credentials is None:
             raise HTTPException(401, "Authentication required", headers={"WWW-Authenticate": "Bearer"})
+        if legacy_enabled and secrets.compare_digest(credentials.credentials, token):
+            return
+        return browser_auth.verify(credentials.credentials)
+
+    @app.get("/api/ui-config")
+    def ui_config():
+        return {"configured": browser_auth.configured, "supabase_url": browser_auth.url, "supabase_publishable_key": browser_auth.key}
+
+    @app.get("/api/session", dependencies=[Depends(authorize)])
+    def browser_session():
+        return {"status": "authenticated"}
+
+    static_dir = Path(__file__).parent / "static"
+    if static_dir.exists():
+        app.mount("/ui", StaticFiles(directory=static_dir), name="ui")
+
+        @app.get("/", include_in_schema=False)
+        def home():
+            return FileResponse(static_dir / "index.html", headers={"Cache-Control":"no-store"})
 
     def db():
         with sessions() as session:

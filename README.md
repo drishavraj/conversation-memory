@@ -40,3 +40,10 @@ python -m pytest -q
 - Existing duplicate source records are retained. New matching ingestion returns HTTP 200 duplicate:true; new entries return 201 duplicate:false.
 
 Keep personal data, recordings, tokens and database backups out of Git. Configure paid AI billing and hosting privately. See SECURITY.md and CONTRIBUTING.md before publishing real data or contributions.
+
+
+## Mobile web app, login and MFA
+
+The API now serves a mobile-first web app at `/`, with Capture, Ask, Library, and Actions. Personal, Side Projects, and Office are labelled throughout. Email/password login and mandatory authenticator-app MFA use Supabase Auth; the API validates signed tokens, MFA assurance, and the single allowed owner. Memories remain in the existing database. See [web app setup](docs/web-app.md) for the four Render environment variables, provider configuration, recovery limits, phone installation and local development.
+
+The Docker build bundles the frontend automatically. An unconfigured deployment shows a setup screen, and keeps its existing API-token behavior until browser auth is configured. Once configured, owner-token access defaults to disabled; set `ALLOW_OWNER_API_TOKEN=false` explicitly to enforce this. Password reset is available, but self-service MFA recovery codes are not implemented.

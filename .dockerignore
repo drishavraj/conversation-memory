@@ -5,3 +5,6 @@ __pycache__
 data
 uploads
 backups
+
+frontend/node_modules
+app/static

@@ -6,3 +6,6 @@ uploads/
 backups/
 .venv/
 __pycache__/
+
+frontend/node_modules/
+app/static/
