@@ -6,7 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, func, or_
 from .models import Knowledge, Entry, SearchRecord
 from .knowledge_api import serialize
-from .provider import GeminiProvider
+from .task_providers import provider_for
+from .ai_settings import defaults_for
 from .worker import safe_error
 
 class Question(BaseModel):
@@ -95,7 +96,8 @@ def router_for(authorize, db, answer_provider=None, embedding_provider=None):
         if not records:
             return {"scope":scope,"retrieval":mode,"warning":warning,"status":"no_evidence","claims":[],"sources":[]}
         try:
-            provider=answer_provider or GeminiProvider()
+            selected=defaults_for(session)[0]['answer']
+            provider=answer_provider or provider_for(selected)
             result=Answer.model_validate(provider.generate(Answer,PROMPT,{"question":payload.question,"scope":scope,"records":records}))
             allowed={r['id'] for r in records}
             if any(not set(claim.source_ids)<=allowed for claim in result.claims):
@@ -104,6 +106,6 @@ def router_for(authorize, db, answer_provider=None, embedding_provider=None):
             code = "invalid_citation" if isinstance(error, ValueError) and str(error) == "Invalid citation" else safe_error(error)
             raise HTTPException(503, detail={"message": "Answer generation unavailable", "error": code})
         cited={source for claim in result.claims for source in claim.source_ids}
-        return {"scope":scope,"retrieval":mode,"warning":warning,"status":"answered" if result.claims else "no_evidence","claims":[c.model_dump() for c in result.claims],"sources":[r for r in records if r['id'] in cited]}
+        return {"scope":scope,"retrieval":mode,"warning":warning,"status":"answered" if result.claims else "no_evidence","answer_model":selected,"claims":[c.model_dump() for c in result.claims],"sources":[r for r in records if r['id'] in cited]}
 
     return router

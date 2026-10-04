@@ -86,7 +86,7 @@ def test_hybrid_chat_cites_semantic_record(client,headers,monkeypatch):
         def generate(self,schema,system,content):
             row=content['records'][0]
             return {'claims':[{'text':row['text'],'source_ids':[row['id']]}]}
-    monkeypatch.setattr('app.chat.GeminiProvider',lambda:Answer())
+    monkeypatch.setattr('app.chat.provider_for',lambda choice:Answer())
     result=client.post('/api/chat',headers=headers,json={'question':'Launch blockers','theme_id':'office'}).json()
     assert result['status']=='answered' and result['retrieval']=='hybrid'
     assert result['claims'][0]['source_ids'][0]==result['sources'][0]['id']

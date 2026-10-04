@@ -61,6 +61,18 @@ const fs = require("fs");
       ),
     { token, user },
   );
+  const taskList = ['transcription','translation','summary','extraction','answer'];
+  const aiSettings = {
+    version:0,
+    defaults:Object.fromEntries(taskList.map(task=>[task,{provider:'gemini',model:'configured-gemini'}])),
+    catalog:[
+      {provider:'gemini',model:'configured-gemini',tasks:taskList,available:true,key_variable:'GEMINI_API_KEY',note:'Original-language audio and structured text.'},
+      {provider:'openai',model:'gpt-4.1-mini',tasks:taskList.slice(1),available:true,key_variable:'OPENAI_API_KEY',note:'Structured text.'},
+      {provider:'sarvam',model:'saaras:v4',tasks:['transcription'],available:true,key_variable:'SARVAM_API_KEY',note:'Mixed-language batch transcription.'}
+    ],
+    embedding:{model:'configured-embedding'}
+  };
+  let uploadedOptions;
   const entry = {
     id: "entry1",
     title: "Product review",
@@ -88,10 +100,24 @@ const fs = require("fs");
     let data = {};
     if (url.pathname === "/api/ui-config")
       data = {
+        environment: "development",
         configured: true,
         supabase_url: "https://example.supabase.co",
         supabase_publishable_key: "sb_publishable_test",
       };
+    else if (url.pathname === "/api/ai-settings") {
+      if(route.request().method()==='PUT') {
+        const body=route.request().postDataJSON();
+        if(body.expected_version!==aiSettings.version)throw new Error('Settings version missing');
+        aiSettings.defaults=body.defaults;aiSettings.version++;
+      }
+      data=aiSettings;
+    }
+    else if (url.pathname === "/api/entries/upload") {
+      const body=route.request().postData();
+      if(!body.includes('saaras:v4') || !body.includes('"en","hi","mr"'))throw new Error('Upload lost processing choices');
+      uploadedOptions=true; data=entry;
+    }
     else if (url.pathname === "/api/session")
       data = { status: "authenticated" };
     else if (url.pathname === "/api/entries") data = [entry];
@@ -121,6 +147,16 @@ const fs = require("fs");
   );
   await page.goto((process.env.UI_BASE_URL || "http://localhost:8000") + "/");
   await page.getByRole("heading", { name: "Keep the thought." }).waitFor();
+  await page.locator('#saveCapture:not([disabled])').waitFor();
+  await page.locator('.env-banner').getByText('DEVELOPMENT · Test environment').waitFor();
+  await page.locator('[data-nav="Settings"]').click();
+  await page.getByLabel('Summary', {exact:true}).selectOption('openai|gpt-4.1-mini');
+  await page.getByRole('button',{name:'Save defaults',exact:true}).click();
+  await page.getByText('Defaults saved. New uploads will use these choices.').waitFor();
+  await page.screenshot({ path: "/tmp/memory-settings.png", fullPage: true });
+  await page.locator('[data-nav="Capture"]').click();
+  await page.locator('#saveCapture:not([disabled])').waitFor();
+  if(await page.locator('#capture-summary').inputValue()!=='openai|gpt-4.1-mini')throw new Error('Default did not reach capture');
   await page.screenshot({ path: "/tmp/memory-desktop.png", fullPage: true });
   await page.locator('[data-nav="Library"]').click();
   await page.getByRole("heading", { name: "Product review" }).waitFor();
@@ -146,6 +182,18 @@ const fs = require("fs");
   await page
     .getByRole("button", { name: "Record audio", exact: true })
     .waitFor();
+  await page.locator('#saveCapture:not([disabled])').waitFor();
+  await page.getByText('Processing options', {exact:true}).click();
+  await page.getByLabel('Transcription',{exact:true}).selectOption('sarvam|saaras:v4');
+  for(const name of ['English','Hindi','Marathi'])await page.getByLabel(name,{exact:true}).check();
+  await page.getByLabel('Give it a title',{exact:true}).fill('Mixed meeting');
+  await page.getByLabel('Audio file',{exact:true}).setInputFiles({name:'meeting.wav',mimeType:'audio/wav',buffer:Buffer.from('RIFF0000WAVEaudio')});
+  await page.screenshot({path:'/tmp/memory-model-mobile.png',fullPage:true});
+  await page.getByLabel('Theme',{exact:true}).selectOption('office');
+  await page.locator('#saveCapture').click();
+  await page.getByRole('heading',{name:'Original text'}).waitFor();
+  if(!uploadedOptions)throw new Error('Upload not submitted');
+  await page.locator('[data-nav="Capture"]').click();
   await page.getByRole("button", { name: "Document", exact: true }).click();
   await page.getByLabel("Document", { exact: true }).waitFor();
   if (
