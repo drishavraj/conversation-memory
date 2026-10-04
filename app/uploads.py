@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, Field, field_validator
 from .models import Asset, Entry, Job
 from .fingerprint import fingerprint
+from .ai_settings import ProcessingOptions, snapshot
 
 AUDIO={'.mp3':'audio/mpeg','.m4a':'audio/mp4','.wav':'audio/wav','.ogg':'audio/ogg','.flac':'audio/flac','.webm':'audio/webm'}
 DOCUMENT={'.txt':'text/plain','.pdf':'application/pdf','.docx':'application/vnd.openxmlformats-officedocument.wordprocessingml.document'}
@@ -31,7 +32,7 @@ def sniff(data,suffix):
 def router_for(authorize,db):
     router=APIRouter(prefix='/api',dependencies=[Depends(authorize)])
     @router.post('/entries/upload',status_code=201)
-    async def upload(file: UploadFile=File(...),title: str | None=Form(None),theme_id: str | None=Form(None),event_at: str | None=Form(None),session=Depends(db)):
+    async def upload(file: UploadFile=File(...),title: str | None=Form(None),theme_id: str | None=Form(None),event_at: str | None=Form(None),processing: str | None=Form(None),session=Depends(db)):
         filename=Path((file.filename or 'upload').replace('\\','/')).name[:200]
         suffix=Path(filename).suffix.lower()
         if suffix not in AUDIO and suffix not in DOCUMENT:
@@ -54,7 +55,17 @@ def router_for(authorize,db):
         existing=session.scalar(select(Entry).where(Entry.fingerprint==key))
         if existing:
             return JSONResponse(status_code=200,content={'id':existing.id,'status':existing.status,'duplicate':True})
-        entry=Entry(title=metadata.title,original_text='',input_type='audio' if suffix in AUDIO else 'document',event_at=metadata.event_at,event_local=metadata.event_at.isoformat() if metadata.event_at else None,theme_id=metadata.theme_id,fingerprint=key)
+        try:
+            options=ProcessingOptions.model_validate_json(processing) if processing else None
+        except ValueError:
+            raise HTTPException(422,'Invalid processing options')
+        input_type='audio' if suffix in AUDIO else 'document'
+        config=snapshot(session,options,input_type)
+        if input_type=='audio' and config['models']['transcription']['provider']=='openai' and suffix in {'.ogg','.flac'}:
+            raise HTTPException(422,'For OpenAI transcription use MP3, M4A, WAV or WebM')
+        if input_type=='audio' and config['models']['transcription']['provider']=='openai' and len(content)>25_000_000:
+            raise HTTPException(413,'OpenAI audio must be at most 25,000,000 bytes')
+        entry=Entry(processing_config=config,title=metadata.title,original_text='',input_type='audio' if suffix in AUDIO else 'document',event_at=metadata.event_at,event_local=metadata.event_at.isoformat() if metadata.event_at else None,theme_id=metadata.theme_id,fingerprint=key)
         try:
             session.add(entry);session.flush()
             session.add(Asset(entry_id=entry.id,filename=filename,mime_type=(AUDIO|DOCUMENT)[suffix],content=content,sha256=digest))

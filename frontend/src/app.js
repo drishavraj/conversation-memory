@@ -16,6 +16,7 @@ const names = {
 const icon = (path) =>
   `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="${path}" /></svg>`;
 const icons = {
+  Settings: icon("M4 7h16M4 17h16M9 4v6M15 14v6"),
   Capture: icon("M12 5v14M5 12h14"),
   Ask: icon("M5 4h14v12H9l-4 4V4Z"),
   Library: icon("M4 4h7v16H4V4ZM13 4h7v16h-7V4Z"),
@@ -238,19 +239,17 @@ async function logout() {
   await showAuth();
 }
 function shell() {
-  root.innerHTML = `<div class="shell"><aside class="sidebar"><div class="brand"><img src="/ui/icon.svg" alt="">Conversation<br>Memory</div><nav class="nav">${Object.keys(
-    icons,
-  )
+  root.innerHTML = `<div class="shell"><aside class="sidebar"><div class="brand"><img src="/ui/icon.svg" alt="">Conversation<br>Memory</div><nav class="nav">${["Capture","Ask","Library","Actions","Settings"]
     .map((n) =>
       btn(
-        `${icons[n]} &nbsp;${n}<small>${{ Capture: "Save something worth keeping", Ask: "Find answers with evidence", Library: "Your conversations, organised", Actions: "Keep your commitments" }[n]}</small>`,
+        `${icons[n]} &nbsp;${n}<small>${{ Capture: "Save something worth keeping", Ask: "Find answers with evidence", Library: "Your conversations, organised", Actions: "Keep your commitments", Settings: "Choose how your memory works" }[n]}</small>`,
         "",
         `data-nav="${n}"`,
       ),
     )
     .join(
       "",
-    )}</nav><div class="notice">A place for what matters.<br><span class="muted">Across work, life, and everything you’re building.</span></div><footer><span class="pill">MFA verified</span><p class="helper">${esc(session.user.email)}</p></footer></aside><main class="main"><header class="topbar"><img class="mobile-mark" src="/ui/icon.svg" alt="Conversation Memory"><span class="eyebrow">Your space to remember</span><div class="row"><select id="theme" aria-label="Current theme"><option value="">All themes</option>${Object.entries(
+    )}</nav><div class="notice">A place for what matters.<br><span class="muted">Across work, life, and everything you’re building.</span></div><footer><span class="pill">MFA verified</span><p class="helper">${esc(session.user.email)}</p></footer></aside><main class="main">${config.environment && config.environment !== "production" ? `<div class="env-banner">${esc(config.environment.toUpperCase())} · Test environment</div>` : ""}<header class="topbar"><img class="mobile-mark" src="/ui/icon.svg" alt="Conversation Memory"><span class="eyebrow">Your space to remember</span><div class="row"><select id="theme" aria-label="Current theme"><option value="">All themes</option>${Object.entries(
     names,
   )
     .map(
@@ -282,12 +281,13 @@ function render() {
     .querySelectorAll("[data-nav]")
     .forEach((b) => b.classList.toggle("active", b.dataset.nav === screen));
   const area = document.querySelector("#content");
-  area.innerHTML = `<div class="intro"><span class="eyebrow">${esc(theme ? names[theme] : "All parts of your life")}</span><h1>${{ Capture: "Keep the thought.", Ask: "What’s on your mind?", Library: "Your memory, organised.", Actions: "Make room for progress." }[screen]}</h1><p class="muted">${{ Capture: "A conversation today. A useful reminder tomorrow.", Ask: "Ask naturally. Every answer leads back to its source.", Library: "The things you said, heard, and saved — all in one place.", Actions: "Your commitments, with the context that matters." }[screen]}</p></div><div id="panel"></div>`;
+  area.innerHTML = `<div class="intro"><span class="eyebrow">${esc(theme ? names[theme] : "All parts of your life")}</span><h1>${{ Capture: "Keep the thought.", Ask: "What’s on your mind?", Library: "Your memory, organised.", Actions: "Make room for progress.", Settings: "Your AI, your choices." }[screen]}</h1><p class="muted">${{ Capture: "A conversation today. A useful reminder tomorrow.", Ask: "Ask naturally. Every answer leads back to its source.", Library: "The things you said, heard, and saved — all in one place.", Actions: "Your commitments, with the context that matters.", Settings: "Choose a default for each task. Fine-tune individual uploads when needed." }[screen]}</p></div><div id="panel"></div>`;
   ({
     Capture: capture,
     Ask: ask,
     Library: () => library(version),
     Actions: () => actions(version),
+    Settings: () => settingsScreen(version),
   })[screen]();
 }
 function localNow() {
@@ -307,6 +307,7 @@ function eventISO(value) {
   return `${value}:00${sign}${String(Math.floor(abs / 60)).padStart(2, "0")}:${String(abs % 60).padStart(2, "0")}`;
 }
 function capture() {
+  const captureVersion = requestVersion;
   document.querySelector("#panel").innerHTML =
     `<div class="grid"><section class="card"><div class="tabs">${[
       ["text", "Text"],
@@ -327,7 +328,19 @@ function capture() {
       )
       .join(
         "",
-      )}</select></div><div><label for="event">When did it happen?</label><input id="event" type="datetime-local" value="${localNow()}" required></div></div><p class="helper">Timezone: ${esc(Intl.DateTimeFormat().resolvedOptions().timeZone)}. Dates in your conversation use this event time.</p>${mode === "text" ? `<label for="transcript">Conversation or note</label><textarea id="transcript" placeholder="Paste your conversation here. Hinglish is welcome." required maxlength="200000"></textarea>` : `<label for="file">${mode === "audio" ? "Audio file" : "Document"}</label><input id="file" type="file" accept="${mode === "audio" ? ".mp3,.m4a,.wav,.ogg,.flac,.webm" : ".txt,.docx,.pdf"}"><p class="helper">${mode === "audio" ? "MP3, M4A, WAV, OGG, FLAC, WebM · Up to 25 MB" : "TXT, DOCX, text-based PDF · Up to 10 MB. Scanned PDFs are not supported."}</p>${mode === "audio" ? `${btn("Record audio", "secondary", 'id="record" type="button"')}<p id="recordState" class="helper" aria-live="polite"></p>` : ""}`}<div class="sectiongap">${btn("Save to memory ↗")}</div></form><div id="captureResult" aria-live="polite"></div></section><aside><div class="card soft"><span class="eyebrow">From conversation to clarity</span><h2 class="sectiongap">Save it once.<br>Come back with a question.</h2><p class="muted">Your memory keeps the original, translates when needed, and brings out useful details and commitments.</p><hr class="divider"><p><strong>Always with context.</strong><br><span class="muted">Check the source behind an answer. Review and correct anything that needs a second look.</span></p></div><p class="helper">Keep Personal, Side Projects, and Office separate using themes.</p></aside></div>`;
+      )}</select></div><div><label for="event">When did it happen?</label><input id="event" type="datetime-local" value="${localNow()}" required></div></div><p class="helper">Timezone: ${esc(Intl.DateTimeFormat().resolvedOptions().timeZone)}. Dates in your conversation use this event time.</p>${mode === "text" ? `<label for="transcript">Conversation or note</label><textarea id="transcript" placeholder="Paste your conversation here. Hinglish is welcome." required maxlength="200000"></textarea>` : `<label for="file">${mode === "audio" ? "Audio file" : "Document"}</label><input id="file" type="file" accept="${mode === "audio" ? ".mp3,.m4a,.wav,.ogg,.flac,.webm" : ".txt,.docx,.pdf"}"><p class="helper">${mode === "audio" ? "MP3, M4A, WAV, OGG, FLAC, WebM · Up to 25 MB" : "TXT, DOCX, text-based PDF · Up to 10 MB. Scanned PDFs are not supported."}</p>${mode === "audio" ? `${btn("Record audio", "secondary", 'id="record" type="button"')}<p id="recordState" class="helper" aria-live="polite"></p>` : ""}`}<details class="processing-options"><summary>Processing options</summary><div id="processingControls" aria-live="polite">Loading model choices…</div></details><div class="sectiongap">${btn("Save to memory ↗", "primary", 'id="saveCapture" disabled')}</div></form><div id="captureResult" aria-live="polite"></div></section><aside><div class="card soft"><span class="eyebrow">From conversation to clarity</span><h2 class="sectiongap">Save it once.<br>Come back with a question.</h2><p class="muted">Your memory keeps the original, translates when needed, and brings out useful details and commitments.</p><hr class="divider"><p><strong>Always with context.</strong><br><span class="muted">Check the source behind an answer. Review and correct anything that needs a second look.</span></p></div><p class="helper">Keep Personal, Side Projects, and Office separate using themes.</p></aside></div>`;
+  let captureSettings;
+  api('/ai-settings').then(data => {
+    if(captureVersion !== requestVersion) return;
+    captureSettings = data;
+    const tasks = mode === 'audio' ? fileTasks : fileTasks.filter(t => t !== 'transcription');
+    document.querySelector('#processingControls').innerHTML = languageControls()+modelControls(data,tasks,'capture');
+    wireModelNotes(data,'capture');
+    document.querySelector('#saveCapture').disabled = false;
+  }).catch(error => { if(captureVersion === requestVersion) {
+    document.querySelector('#processingControls').textContent = 'Could not load model choices. Refresh this screen to retry.';
+    message(error.message);
+  }});
   document.querySelectorAll("[data-mode]").forEach(
     (b) =>
       (b.onclick = () => {
@@ -348,13 +361,15 @@ function capture() {
         event_at = eventISO(document.querySelector("#event").value);
       if (!title || !theme_id)
         throw new Error("Add a title and choose a theme.");
+      if(!captureSettings) throw new Error('Wait for model choices to load.');
+      const processing = {models:readModels('capture'), languages:[...document.querySelectorAll('[name="language"]:checked')].map(x=>x.value)};
       let entry;
       if (mode === "text") {
         const text = document.querySelector("#transcript").value;
         if (!text.trim()) throw new Error("Add a conversation or note.");
         entry = await api("/entries/text", {
           method: "POST",
-          body: JSON.stringify({ title, theme_id, event_at, text }),
+          body: JSON.stringify({ title, theme_id, event_at, text, processing }),
         });
       } else {
         const file = document.querySelector("#file").files[0] || recordingFile;
@@ -363,13 +378,14 @@ function capture() {
           throw new Error("This file exceeds the upload limit.");
         const data = new FormData();
         data.set("file", file);
+        data.set("processing",JSON.stringify(processing));
         data.set("title", title);
         data.set("theme_id", theme_id);
         data.set("event_at", event_at);
         entry = await api("/entries/upload", { method: "POST", body: data });
       }
       document.querySelector("#captureResult").innerHTML =
-        `<p class="success">${entry.duplicate ? "Already saved. Opening the existing entry." : "Saved. Processing will run automatically."}</p>`;
+        `<p class="success">${entry.duplicate ? "Already saved. Opening the existing entry with its original processing settings." : "Saved. Processing will run automatically."}</p>`;
       await openEntry(entry.id);
     });
   };
@@ -543,7 +559,7 @@ async function openEntry(id) {
       api("/entries/" + id + "/knowledge"),
     ]);
     if (version !== requestVersion) return;
-    area.innerHTML = `${btn("← Back to library", "link", 'id="back"')}<div class="intro"><h1>${esc(entry.title)}</h1><div class="row">${badge(entry.theme_id)}<span class="pill ${esc(entry.status)}">${esc(entry.status)}</span><span class="meta">${date(entry.event_at || entry.uploaded_at)}</span></div></div>${entry.status === "failed" ? `<div class="error">Processing failed: ${esc(entry.job?.error || "Unknown error")}. ${btn("Retry processing", "secondary", 'id="retry"')}</div>` : ""}${["queued", "processing"].includes(entry.status) ? '<p class="notice" role="status">Processing automatically. This page will update when it is ready.</p>' : ""}${knowledge.summary ? `<section class="card soft"><span class="eyebrow">The essentials</span><p>${esc(knowledge.summary)}</p></section>` : ""}${knowledge.items.length ? `<h2>What to remember</h2>${knowledge.items.map((item) => itemCard(item, true)).join("")}` : ""}<section class="card"><h2>Original ${entry.input_type === "audio" ? "transcript" : "text"}</h2><p class="text">${esc(entry.original_text || "Available after processing.")}</p>${entry.input_type !== "text" ? btn("Download original file", "secondary", 'id="download"') : ""}</section>${knowledge.english_text ? `<section class="card"><h2>English version</h2><p class="text">${esc(knowledge.english_text)}</p></section>` : ""}${entry.index_status === "failed" ? `<p class="notice">Semantic indexing failed. ${btn("Retry indexing", "secondary", 'id="indexRetry"')}</p>` : ""}`;
+    area.innerHTML = `${btn("← Back to library", "link", 'id="back"')}<div class="intro"><h1>${esc(entry.title)}</h1><div class="row">${badge(entry.theme_id)}<span class="pill ${esc(entry.status)}">${esc(entry.status)}</span><span class="meta">${date(entry.event_at || entry.uploaded_at)}</span></div></div>${entry.status === "failed" ? `<div class="error">Processing failed: ${esc(entry.job?.error || "Unknown error")}. ${btn("Retry processing", "secondary", 'id="retry"')}</div>` : ""}${["queued", "processing"].includes(entry.status) ? `<p class="notice" role="status">${esc(entry.job?.stage || "queued")} · Processing automatically. This page will update when it is ready.</p>` : ""}${processingDetails(entry)}${knowledge.summary ? `<section class="card soft"><span class="eyebrow">The essentials</span><p>${esc(knowledge.summary)}</p></section>` : ""}${knowledge.items.length ? `<h2>What to remember</h2>${knowledge.items.map((item) => itemCard(item, true)).join("")}` : ""}<section class="card"><h2>Original ${entry.input_type === "audio" ? "transcript" : "text"}</h2><p class="text">${esc(entry.original_text || "Available after processing.")}</p>${entry.input_type !== "text" ? btn("Download original file", "secondary", 'id="download"') : ""}</section>${knowledge.english_text ? `<section class="card"><h2>English version</h2><p class="text">${esc(knowledge.english_text)}</p></section>` : ""}${entry.index_status === "failed" ? `<p class="notice">Semantic indexing failed. ${btn("Retry indexing", "secondary", 'id="indexRetry"')}</p>` : ""}`;
     document.querySelector("#back").onclick = () => {
       screen = "Library";
       render();
@@ -755,4 +771,51 @@ async function init() {
     document.querySelector("#reload").onclick = () => location.reload();
   }
 }
+
+const taskNames={transcription:'Transcription',translation:'English translation',summary:'Summary',extraction:'Memories, decisions & actions',answer:'Answers to questions'};
+const fileTasks=['transcription','translation','summary','extraction'];
+function modelKey(choice){return choice.provider+'|'+choice.model}
+function modelControls(data,tasks,prefix){
+  return tasks.map(task=>{
+    const selected=data.defaults[task], key=modelKey(selected);
+    const options=data.catalog.filter(x=>x.tasks.includes(task));
+    const missing=!options.some(x=>modelKey(x)===key);
+    return `<div class="model-row"><label for="${prefix}-${task}">${esc(taskNames[task])}</label><select id="${prefix}-${task}" data-model-task="${task}" data-model-prefix="${prefix}">${missing?`<option value="${esc(key)}" selected disabled>${esc(selected.provider+' / '+selected.model)} — unavailable</option>`:''}${options.map(x=>`<option value="${esc(modelKey(x))}" ${key===modelKey(x)?'selected':''} ${x.available?'':'disabled'}>${esc(x.provider+' / '+x.model)}${x.available?'':' — key not configured'}</option>`).join('')}</select><p class="helper" data-model-note="${prefix}-${task}"></p></div>`;
+  }).join('');
+}
+function wireModelNotes(data,prefix){
+  document.querySelectorAll(`[data-model-prefix="${prefix}"]`).forEach(select=>{
+    const update=()=>{const item=data.catalog.find(x=>modelKey(x)===select.value);document.querySelector(`[data-model-note="${select.id}"]`).textContent=item?item.note+(item.available?'':' Add '+item.key_variable+' to your shared Render group first.'):'This model is not in the supported catalog. Choose another model.'};
+    select.onchange=update;update();
+  });
+}
+function readModels(prefix){
+  const models={};
+  document.querySelectorAll(`[data-model-prefix="${prefix}"]`).forEach(select=>{
+    if(select.selectedOptions[0]?.disabled)throw new Error('Choose an available model for '+taskNames[select.dataset.modelTask]+'.');
+    const [provider,model]=select.value.split('|');models[select.dataset.modelTask]={provider,model};
+  });return models;
+}
+function languageControls(){return `<fieldset class="languages"><legend>Expected languages</legend><p class="helper">Leave unchecked for automatic detection. For mixed speech, select all expected languages.</p>${Object.entries({en:'English',hi:'Hindi',mr:'Marathi'}).map(([id,name])=>`<label><input type="checkbox" name="language" value="${id}"> ${name}</label>`).join('')}</fieldset>`}
+async function settingsScreen(version){
+  const panel=document.querySelector('#panel');panel.innerHTML='<p role="status">Loading AI settings…</p>';
+  try{
+    const data=await api('/ai-settings');if(version!==requestVersion)return;
+    const providers=[...new Set(data.catalog.map(x=>x.provider))];
+    panel.innerHTML=`<div class="grid"><section class="card"><form id="aiSettings"><h2>Default models</h2><p class="helper">These defaults apply to new uploads. Existing entries keep the choices saved with them. Answer settings apply to your next question.</p>${modelControls(data,Object.keys(taskNames),'defaults')}<div class="sectiongap">${btn('Save defaults')}</div></form><div id="settingsStatus" role="status"></div></section><aside><section class="card soft"><h2>Connected providers</h2>${providers.map(name=>{const row=data.catalog.find(x=>x.provider===name);return `<p><strong>${esc(name)}</strong> · ${row.available?'Key configured':'Key needed'}<br><span class="helper">${esc(row.key_variable)}</span></p>`}).join('')}<p class="helper">Keys are managed in Render. “Key configured” means a key is present; model access and results still need a live test.</p></section><section class="card"><h3>Semantic search</h3><p>${esc(data.embedding.model||'Not configured')}</p><p class="helper">Managed through EMBEDDING_MODEL. Switching embedding models requires reindexing, so this setting stays outside per-upload controls.</p></section><p class="helper">Transcription, translation, summary, and extraction run independently. Choosing different providers sends the relevant source to each selected provider. Separate calls can increase processing time and cost.</p></aside></div>`;
+    wireModelNotes(data,'defaults');
+    document.querySelector('#aiSettings').onsubmit=e=>{e.preventDefault();safe(e.submitter,async()=>{
+      const updated=await api('/ai-settings',{method:'PUT',body:JSON.stringify({expected_version:data.version,defaults:readModels('defaults')})});
+      data.version=updated.version;
+      if(version===requestVersion)document.querySelector('#settingsStatus').innerHTML='<p class="success">Defaults saved. New uploads will use these choices.</p>';
+    })};
+  }catch(error){if(version===requestVersion)message(error.message)}
+}
+function processingDetails(entry){
+  const config=entry.processing_config;
+  if(!config)return '<p class="helper">This entry predates saved model selections.</p>';
+  const completed=entry.completed_stages||[];
+  return `<details class="card"><summary>Processing details</summary><p class="helper">Choices saved when this entry was queued. A retry keeps these choices and completed stages.</p>${Object.entries(config.models).map(([task,choice])=>`<p><strong>${esc(taskNames[task]||task)}</strong><br>${esc(choice.provider)} / ${esc(choice.model)} <span class="pill">${completed.includes(task)?'Completed':'Not completed'}</span></p>`).join('')}<p class="helper">Expected languages: ${esc(config.languages?.join(', ')||'Automatic detection')}</p></details>`;
+}
+
 init();

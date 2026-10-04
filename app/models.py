@@ -22,6 +22,8 @@ class Entry(Base):
     event_local: Mapped[str | None] = mapped_column(String(64), nullable=True)
     index_status: Mapped[str] = mapped_column(String(32), default="pending")
     index_error: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    processing_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    processing_outputs: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     original_text: Mapped[str] = mapped_column(Text)
     fingerprint: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
     theme_id: Mapped[str | None] = mapped_column(ForeignKey("themes.id"), nullable=True)
@@ -38,6 +40,7 @@ class Job(Base):
     attempts: Mapped[int] = mapped_column(default=0)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 class ProcessedEntry(Base):
@@ -95,3 +98,9 @@ class SearchRecord(Base):
     end: Mapped[int | None] = mapped_column(nullable=True)
     model: Mapped[str] = mapped_column(String(100))
     vector: Mapped[list] = mapped_column(JSON)
+
+class AISettings(Base):
+    __tablename__ = "ai_settings"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    defaults: Mapped[dict] = mapped_column(JSON)
+    version: Mapped[int] = mapped_column(default=1)

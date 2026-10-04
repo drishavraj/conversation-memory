@@ -11,7 +11,7 @@ class Answers:
 def test_cited_chat_and_scope(client,headers,monkeypatch):
     setup_items(client,headers)
     provider=Answers()
-    monkeypatch.setattr('app.chat.GeminiProvider',lambda:provider)
+    monkeypatch.setattr('app.chat.provider_for',lambda choice:provider)
     response=client.post('/api/chat',json={'question':'What was said about UAT?','theme_id':'office'},headers=headers)
     assert response.status_code==200
     result=response.json()
@@ -25,12 +25,12 @@ def test_unknown_citation_rejected(client,headers,monkeypatch):
     setup_items(client,headers)
     class Bad:
         def generate(self,*args):return {'claims':[{'text':'Invented','source_ids':['unknown-id']}]}
-    monkeypatch.setattr('app.chat.GeminiProvider',lambda:Bad())
+    monkeypatch.setattr('app.chat.provider_for',lambda choice:Bad())
     assert client.post('/api/chat',json={'question':'UAT'},headers=headers).status_code==503
 
 def test_no_evidence_no_provider_call(client,headers,monkeypatch):
-    def fail():raise AssertionError('Must not call provider')
-    monkeypatch.setattr('app.chat.GeminiProvider',fail)
+    def fail(choice):raise AssertionError('Must not call provider')
+    monkeypatch.setattr('app.chat.provider_for',fail)
     assert client.post('/api/chat',json={'question':'Anything about elephants?'},headers=headers).json()['status']=='no_evidence'
     assert client.post('/api/chat',json={'question':'UAT'}).status_code==401
     assert client.post('/api/chat',json={'question':'   '},headers=headers).status_code==422
@@ -38,7 +38,7 @@ def test_no_evidence_no_provider_call(client,headers,monkeypatch):
 def test_corrected_text_retrieved(client,headers,monkeypatch):
     item=setup_items(client,headers)[0]
     client.patch('/api/knowledge/'+item['id'],json={'expected_version':1,'reason':'Corrected','text':'Certification confirmed Thursday'},headers=headers)
-    monkeypatch.setattr('app.chat.GeminiProvider',lambda:Answers())
+    monkeypatch.setattr('app.chat.provider_for',lambda choice:Answers())
     result=client.post('/api/chat',json={'question':'Certification'},headers=headers).json()
     assert result['sources'][0]['origin']=='user_corrected'
     assert client.post('/api/chat',json={'question':'Wednesday'},headers=headers).json()['status']=='no_evidence'

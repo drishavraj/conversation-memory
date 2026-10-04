@@ -15,11 +15,13 @@ from sqlalchemy.exc import IntegrityError
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from .fingerprint import fingerprint
+from .ai_settings import ProcessingOptions, snapshot
 from redis import Redis
 from .database import make_engine, session_factory
 from .models import Entry, Job, Theme, ProcessedEntry, Knowledge
 
 class TextInput(BaseModel):
+    processing: ProcessingOptions | None = None
     text: str = Field(min_length=1, max_length=200000)
     title: str = Field(default="Untitled entry", min_length=1, max_length=200)
     theme_id: Literal["personal", "side-projects", "office"] | None = None
@@ -79,7 +81,7 @@ def create_app(database_url=None, owner_token=None, answer_provider=None, embedd
 
     @app.get("/api/ui-config")
     def ui_config():
-        return {"configured": browser_auth.configured, "supabase_url": browser_auth.url, "supabase_publishable_key": browser_auth.key}
+        return {"configured": browser_auth.configured, "supabase_url": browser_auth.url, "supabase_publishable_key": browser_auth.key, "environment": os.getenv("APP_ENV", "production")}
 
     @app.get("/api/session", dependencies=[Depends(authorize)])
     def browser_session():
@@ -98,7 +100,7 @@ def create_app(database_url=None, owner_token=None, answer_provider=None, embedd
             yield session
 
     def entry_dict(entry):
-        return {"id": entry.id, "title": entry.title, "original_text": entry.original_text, "theme_id": entry.theme_id, "classification_status": "selected" if entry.theme_id else "needs_review", "event_at": entry.event_at, "uploaded_at": entry.uploaded_at, "status": entry.status,"input_type":entry.input_type,"index_status":entry.index_status,"index_error":entry.index_error}
+        return {"id": entry.id, "title": entry.title, "original_text": entry.original_text, "theme_id": entry.theme_id, "classification_status": "selected" if entry.theme_id else "needs_review", "event_at": entry.event_at, "uploaded_at": entry.uploaded_at, "status": entry.status,"input_type":entry.input_type,"index_status":entry.index_status,"index_error":entry.index_error, "processing_config":entry.processing_config, "completed_stages":[name for name in (entry.processing_outputs or {}) if not name.startswith("_")]}
 
     @app.get("/health")
     def health():
@@ -125,7 +127,8 @@ def create_app(database_url=None, owner_token=None, answer_provider=None, embedd
         existing = session.scalar(select(Entry).where(Entry.fingerprint == digest))
         if existing:
             return JSONResponse(status_code=200,content=jsonable_encoder({**entry_dict(existing),"duplicate":True}))
-        entry = Entry(title=payload.title, original_text=payload.text, theme_id=payload.theme_id, event_at=payload.event_at, event_local=payload.event_at.isoformat() if payload.event_at else None, fingerprint=digest)
+        config = snapshot(session, payload.processing, "text")
+        entry = Entry(processing_config=config, title=payload.title, original_text=payload.text, theme_id=payload.theme_id, event_at=payload.event_at, event_local=payload.event_at.isoformat() if payload.event_at else None, fingerprint=digest)
         try:
             session.add(entry)
             session.flush()
@@ -162,6 +165,10 @@ def create_app(database_url=None, owner_token=None, answer_provider=None, embedd
         job = session.scalar(select(Job).where(Job.entry_id == entry_id))
         if not job or job.status != "failed":
             raise HTTPException(409, "Only failed jobs can be retried")
+        if job.error in {'sarvam_batch_failed', 'sarvam_job_expired'}:
+            # An explicit retry starts a fresh remote job after terminal failure.
+            entry.processing_outputs = {k:v for k,v in (entry.processing_outputs or {}).items() if k != '_sarvam'}
+        job.next_attempt_at = None
         job.status, job.error = "queued", None
         entry.status = "queued"
         session.commit()
@@ -175,6 +182,8 @@ def create_app(database_url=None, owner_token=None, answer_provider=None, embedd
         rows = session.scalars(select(Knowledge).where(Knowledge.entry_id == entry_id)).all()
         return {"english_text":result.english_text if result else None, "summary":result.summary if result else None, "suggested_theme":result.suggested_theme if result else None, "items":[{"id":r.id,"kind":r.kind,"text":r.text,"theme_id":r.theme_id,"certainty":r.certainty,"owner":r.owner,"due_date":r.due_date,"date_basis":r.date_basis,"evidence":r.evidence,"evidence_start":r.evidence_start,"evidence_end":r.evidence_end,"source_entry_id":r.entry_id,"status":r.status,"origin":r.origin,"version":r.version} for r in rows]}
 
+    from .ai_settings import router_for as settings_router
+    app.include_router(settings_router(authorize, db))
     from .knowledge_api import router_for
     app.include_router(router_for(authorize, db))
     from .chat import router_for as chat_router

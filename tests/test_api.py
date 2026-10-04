@@ -12,6 +12,8 @@ TOKEN = 'test-owner-token-that-is-long-enough'
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.delenv('REDIS_URL', raising=False)
+    monkeypatch.setenv('GEMINI_API_KEY','test-secret')
+    monkeypatch.setenv('GENERATION_MODEL','test-model')
     url = f'sqlite:///{tmp_path}/test.db'
     monkeypatch.setenv('DATABASE_URL', url)
     cfg = Config('alembic.ini')

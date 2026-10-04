@@ -477,3 +477,13 @@ dialog::backdrop {
 .nav svg {
   vertical-align: middle;
 }
+.env-banner {background:#fff0bf;color:#624e16;border:1px solid #e4cc7c;border-radius:10px;padding:10px 16px;font-size:12px;font-weight:700;margin-bottom:20px;letter-spacing:.8px}
+.processing-options {margin-top:24px;border-top:1px solid var(--line);padding-top:18px}
+summary {cursor:pointer;font-weight:600;padding:8px 0}
+.model-row {padding:4px 0 10px;border-bottom:1px solid var(--line)}
+.model-row select {font-size:13px}
+.languages {border:0;padding:16px 0;margin:0}
+.languages legend {padding:12px 0 0;font-size:13px;font-weight:600}
+.languages label {display:inline-flex;align-items:center;gap:6px;margin-right:14px}
+.languages input {width:auto}
+@media(max-width:640px){.nav button{padding:10px 8px;min-width:58px}.nav svg{display:block;margin:0 auto 3px}.nav{align-items:center}.model-row select{max-width:100%}}
