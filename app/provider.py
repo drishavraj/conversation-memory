@@ -1,8 +1,31 @@
+import copy
 import json
 import os
 import re
 import httpx
 from .extraction import Extraction, SYSTEM_PROMPT
+
+def gemini_response_schema(schema):
+    """Keep array upper bounds in local validation, not Gemini's decoder schema.
+
+    The extraction schema's maxItems=500 caused INVALID_ARGUMENT in a live
+    Gemini request; the same request succeeded with only maxItems removed.
+    Copy the schema so other providers and Pydantic retain their constraints.
+    """
+    result = copy.deepcopy(schema)
+
+    def visit(node):
+        if isinstance(node, dict):
+            if node.get("type") == "array":
+                node.pop("maxItems", None)
+            for value in node.values():
+                visit(value)
+        elif isinstance(node, list):
+            for value in node:
+                visit(value)
+
+    visit(result)
+    return result
 
 class ProviderError(RuntimeError):
     def __init__(self, code):
@@ -26,7 +49,7 @@ class GeminiProvider:
         payload = {
             "systemInstruction": {"parts": [{"text": system}]},
             "contents": [{"role": "user", "parts": [{"text": json.dumps(content, ensure_ascii=False)}] + (extra_parts or [])}],
-            "generationConfig": {"responseMimeType":"application/json", "responseJsonSchema":schema.model_json_schema(), "temperature":0.1}
+            "generationConfig": {"responseMimeType":"application/json", "responseJsonSchema":gemini_response_schema(schema.model_json_schema()), "temperature":0.1}
         }
         with httpx.Client(timeout=120, transport=self.transport) as client:
             response = client.post(f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent", headers={"x-goog-api-key":self.key}, json=payload)
