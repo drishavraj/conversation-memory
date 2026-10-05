@@ -61,3 +61,14 @@ def test_review_and_missing(client, headers):
     assert result['classification_status'] == 'needs_review'
     assert client.get('/api/entries/nonexistent',headers=headers).status_code == 404
     assert client.get('/health').status_code == 200
+
+
+def test_conversation_search_respects_theme_and_literal_text(client, headers):
+    for title, text, theme in [('Planning', 'Checklist for Monday', 'office'), ('Private checklist', 'Home note', 'personal'), ('Budget', '100% complete', 'office')]:
+        assert client.post('/api/entries/text', headers=headers, json={'title': title, 'text': text, 'theme_id': theme}).status_code == 201
+    result = client.get('/api/entries', headers=headers, params={'q': 'CHECKLIST', 'theme_id': 'office'}).json()
+    assert len(result) == 1 and result[0]['title'] == 'Planning'
+    result = client.get('/api/entries', headers=headers, params={'q': '%'}).json()
+    assert len(result) == 1 and result[0]['title'] == 'Budget'
+    assert client.get('/api/entries', headers=headers, params={'q': 'missing'}).json() == []
+    assert client.get('/api/entries', headers=headers, params={'q': 'x' * 201}).status_code == 422

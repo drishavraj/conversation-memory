@@ -1,5 +1,31 @@
 import { createClient } from "@supabase/supabase-js";
 const root = document.querySelector("#app");
+let appearance = 'system';
+try { appearance = localStorage.getItem('memory-appearance') || 'system'; } catch {}
+const systemAppearance = matchMedia('(prefers-color-scheme: dark)');
+function applyAppearance() {
+  const dark = appearance === 'dark' || (appearance === 'system' && systemAppearance.matches);
+  document.documentElement.dataset.appearance = dark ? 'dark' : 'light';
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#111416' : '#f7f8fa');
+}
+systemAppearance.addEventListener('change', applyAppearance);
+applyAppearance();
+let previewURL, recordingPending = false, libraryQuery = '';
+function clearAudio() {
+  if (previewURL) URL.revokeObjectURL(previewURL);
+  previewURL = null; recordingFile = null;
+}
+function leaveCapture() {
+  if (screen === 'Capture' && (recordingPending || recordingFile || recorder?.state === 'recording' || recorder?.state === 'paused')) {
+    if (!confirm('Leave and discard this unsaved recording?')) return false;
+  }
+  stopRecording(); clearAudio(); return true;
+}
+window.addEventListener('beforeunload', e => {
+  if (recordingPending || recordingFile || recorder?.state === 'recording' || recorder?.state === 'paused') {
+    e.preventDefault(); e.returnValue = '';
+  }
+});
 const esc = (x) =>
   String(x ?? "").replace(
     /[&<>"']/g,
@@ -25,9 +51,9 @@ const icons = {
 let auth,
   config,
   session,
-  screen = "Capture",
+  screen = "Actions",
   theme = "",
-  mode = "text",
+  mode = "audio",
   actionStatus = "active",
   factor,
   qr,
@@ -105,7 +131,7 @@ async function safe(button, work) {
   }
 }
 async function showAuth() {
-  stopRecording();
+  stopRecording(); clearAudio();
   clearTimeout(refreshTimer);
   requestVersion++;
   const { data } = await auth.auth.getSession();
@@ -234,44 +260,23 @@ function wireVerify() {
   };
 }
 async function logout() {
-  stopRecording();
+  if (!leaveCapture()) return;
   await auth.auth.signOut();
   await showAuth();
 }
+const navNames = {Actions:'To-dos', Capture:'Record', Library:'Conversations'};
+function navigate(next) {
+  if (!leaveCapture()) return;
+  screen = next; render();
+}
 function shell() {
-  root.innerHTML = `<div class="shell"><aside class="sidebar"><div class="brand"><img src="/ui/icon.svg" alt="">Conversation<br>Memory</div><nav class="nav">${["Capture","Ask","Library","Actions","Settings"]
-    .map((n) =>
-      btn(
-        `${icons[n]} &nbsp;${n}<small>${{ Capture: "Save something worth keeping", Ask: "Find answers with evidence", Library: "Your conversations, organised", Actions: "Keep your commitments", Settings: "Choose how your memory works" }[n]}</small>`,
-        "",
-        `data-nav="${n}"`,
-      ),
-    )
-    .join(
-      "",
-    )}</nav><div class="notice">A place for what matters.<br><span class="muted">Across work, life, and everything you’re building.</span></div><footer><span class="pill">MFA verified</span><p class="helper">${esc(session.user.email)}</p></footer></aside><main class="main">${config.environment && config.environment !== "production" ? `<div class="env-banner">${esc(config.environment.toUpperCase())} · Test environment</div>` : ""}<header class="topbar"><img class="mobile-mark" src="/ui/icon.svg" alt="Conversation Memory"><span class="eyebrow">Your space to remember</span><div class="row"><select id="theme" aria-label="Current theme"><option value="">All themes</option>${Object.entries(
-    names,
-  )
-    .map(
-      ([id, n]) =>
-        `<option value="${id}" ${theme === id ? "selected" : ""}>${n}</option>`,
-    )
-    .join(
-      "",
-    )}</select>${btn("Sign out", "link logout", 'id="logout"')}</div></header><div id="content"></div></main></div>`;
-  document.querySelector("#logout").onclick = logout;
-  document.querySelector("#theme").onchange = (e) => {
-    theme = e.target.value;
-    render();
+  root.innerHTML = `<div class="shell"><aside class="sidebar"><div class="brand"><img src="/ui/icon.svg" alt="">Memory</div><nav class="nav" aria-label="Main navigation">${Object.entries(navNames).map(([id,label])=>btn(`${icons[id]}<span>${label}</span>`,'',`data-nav="${id}"`)).join('')}</nav><footer><span class="helper">Your conversations. Your space.</span></footer></aside><main class="main">${config.environment && config.environment !== 'production' ? `<div class="env-banner">${esc(config.environment.toUpperCase())} · Test environment</div>` : ''}<header class="topbar"><span class="brand compact">Memory</span><div class="row"><select id="theme" aria-label="Current theme"><option value="">All themes</option>${Object.entries(names).map(([id,n])=>`<option value="${id}" ${theme===id?'selected':''}>${n}</option>`).join('')}</select>${btn(icons.Settings,'icon-button','id="settingsNav" aria-label="Settings"')}</div></header><div id="content"></div></main></div>`;
+  document.querySelector('#settingsNav').onclick = () => navigate('Settings');
+  document.querySelector('#theme').onchange = e => {
+    if (!leaveCapture()) { e.target.value = theme; return; }
+    theme = e.target.value; render();
   };
-  root.querySelectorAll("[data-nav]").forEach(
-    (b) =>
-      (b.onclick = () => {
-        stopRecording();
-        screen = b.dataset.nav;
-        render();
-      }),
-  );
+  root.querySelectorAll('[data-nav]').forEach(b=>b.onclick=()=>navigate(b.dataset.nav));
   render();
 }
 function render() {
@@ -279,9 +284,11 @@ function render() {
   const version = ++requestVersion;
   root
     .querySelectorAll("[data-nav]")
-    .forEach((b) => b.classList.toggle("active", b.dataset.nav === screen));
+    .forEach((b) => b.classList.toggle("active", b.dataset.nav === (screen === "Ask" ? "Library" : screen)));
   const area = document.querySelector("#content");
-  area.innerHTML = `<div class="intro"><span class="eyebrow">${esc(theme ? names[theme] : "All parts of your life")}</span><h1>${{ Capture: "Keep the thought.", Ask: "What’s on your mind?", Library: "Your memory, organised.", Actions: "Make room for progress.", Settings: "Your AI, your choices." }[screen]}</h1><p class="muted">${{ Capture: "A conversation today. A useful reminder tomorrow.", Ask: "Ask naturally. Every answer leads back to its source.", Library: "The things you said, heard, and saved — all in one place.", Actions: "Your commitments, with the context that matters.", Settings: "Choose a default for each task. Fine-tune individual uploads when needed." }[screen]}</p></div><div id="panel"></div>`;
+  area.innerHTML = `<div class="intro"><h1>${{Capture:'Record a conversation',Actions:'To-dos',Library:'Conversations',Ask:'Ask your memory',Settings:'Settings'}[screen]}</h1>${screen==='Actions'?btn('Record conversation','primary','id="quickRecord"'):''}</div>${['Library','Ask'].includes(screen)?`<div class="tabs">${btn('Conversations',screen==='Library'?'active':'','data-view="Library"')}${btn('Ask your memory',screen==='Ask'?'active':'','data-view="Ask"')}</div>`:''}<div id="panel"></div>`;
+  document.querySelector('#quickRecord')?.addEventListener('click',()=>navigate('Capture'));
+  root.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>navigate(b.dataset.view));
   ({
     Capture: capture,
     Ask: ask,
@@ -308,27 +315,15 @@ function eventISO(value) {
 }
 function capture() {
   const captureVersion = requestVersion;
-  document.querySelector("#panel").innerHTML =
-    `<div class="grid"><section class="card"><div class="tabs">${[
-      ["text", "Text"],
-      ["audio", "Audio"],
-      ["document", "Document"],
-    ]
-      .map(([id, n]) =>
-        btn(n, id === mode ? "active" : "", `data-mode="${id}"`),
-      )
-      .join(
-        "",
-      )}</div><form id="capture"><label for="title">Give it a title</label><input id="title" placeholder="e.g. Friday’s product review" maxlength="200" required><div class="fields"><div><label for="captureTheme">Theme</label><select id="captureTheme" required><option value="">Choose a theme</option>${Object.entries(
-      names,
-    )
-      .map(
-        ([id, n]) =>
-          `<option value="${id}" ${id === theme ? "selected" : ""}>${n}</option>`,
-      )
-      .join(
-        "",
-      )}</select></div><div><label for="event">When did it happen?</label><input id="event" type="datetime-local" value="${localNow()}" required></div></div><p class="helper">Timezone: ${esc(Intl.DateTimeFormat().resolvedOptions().timeZone)}. Dates in your conversation use this event time.</p>${mode === "text" ? `<label for="transcript">Conversation or note</label><textarea id="transcript" placeholder="Paste your conversation here. Hinglish is welcome." required maxlength="200000"></textarea>` : `<label for="file">${mode === "audio" ? "Audio file" : "Document"}</label><input id="file" type="file" accept="${mode === "audio" ? ".mp3,.m4a,.wav,.ogg,.flac,.webm" : ".txt,.docx,.pdf"}"><p class="helper">${mode === "audio" ? "MP3, M4A, WAV, OGG, FLAC, WebM · Up to 25 MB" : "TXT, DOCX, text-based PDF · Up to 10 MB. Scanned PDFs are not supported."}</p>${mode === "audio" ? `${btn("Record audio", "secondary", 'id="record" type="button"')}<p id="recordState" class="helper" aria-live="polite"></p>` : ""}`}<details class="processing-options"><summary>Processing options</summary><div id="processingControls" aria-live="polite">Loading model choices…</div></details><div class="sectiongap">${btn("Save to memory ↗", "primary", 'id="saveCapture" disabled')}</div></form><div id="captureResult" aria-live="polite"></div></section><aside><div class="card soft"><span class="eyebrow">From conversation to clarity</span><h2 class="sectiongap">Save it once.<br>Come back with a question.</h2><p class="muted">Your memory keeps the original, translates when needed, and brings out useful details and commitments.</p><hr class="divider"><p><strong>Always with context.</strong><br><span class="muted">Check the source behind an answer. Review and correct anything that needs a second look.</span></p></div><p class="helper">Keep Personal, Side Projects, and Office separate using themes.</p></aside></div>`;
+  document.querySelector("#panel").innerHTML = `<section class="capture-panel"><div class="tabs capture-tabs">${[['audio','Record / audio'],['text','Text'],['document','Document']].map(([id,label])=>btn(label,mode===id?'active':'',`data-mode="${id}"`)).join('')}</div><form id="capture"><label for="captureTheme">Theme</label><select id="captureTheme" required><option value="">Choose a theme</option>${Object.entries(names).map(([id,n])=>`<option value="${id}" ${theme===id?'selected':''}>${n}</option>`).join('')}</select>${mode==='audio'?`<div class="recorder"><button id="record" type="button" class="record-button">${icon('M9 5a3 3 0 0 1 6 0v7a3 3 0 0 1-6 0V5ZM5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8')}<span>Record conversation</span></button><p id="recordState" role="status">Ready when you are.</p><button id="pauseRecord" type="button" class="secondary" hidden>Pause</button><div id="audioPreview"></div></div><details><summary>Upload an audio file</summary><label for="file">Audio file</label><input id="file" type="file" accept=".mp3,.m4a,.wav,.ogg,.flac,.webm"><p class="helper">Up to 25 MB</p></details>`:mode==='text'?'<label for="transcript">Conversation or note</label><textarea id="transcript" required maxlength="200000" placeholder="Paste a conversation or write a note…"></textarea>':'<label for="file">Document</label><input id="file" type="file" accept=".txt,.pdf,.docx"><p class="helper">TXT, DOCX or text-based PDF · Up to 10 MB</p>'}<details class="capture-details"><summary>Title &amp; date</summary><label for="title">Title (optional)</label><input id="title" maxlength="200" placeholder="A title will be added if left blank"><label for="event">When did it happen?</label><input id="event" type="datetime-local" value="${localNow()}" required><p class="helper">${esc(Intl.DateTimeFormat().resolvedOptions().timeZone)} · Used to interpret dates in the conversation.</p></details><details class="processing-options"><summary>Processing options</summary><div id="processingControls">Loading model choices…</div></details><div class="sectiongap">${btn('Save conversation','primary','id="saveCapture" disabled')}</div></form><div id="captureResult" aria-live="polite"></div></section>`;
+  document.querySelector('#pauseRecord')?.addEventListener('click', e=>{
+    if(recorder?.state==='recording'){recorder.pause();e.target.textContent='Resume';}
+    else if(recorder?.state==='paused'){recorder.resume();e.target.textContent='Pause';}
+  });
+  document.querySelector('#file')?.addEventListener('change',e=>{
+    if(recordingFile && e.target.files.length && !confirm('Replace the recorded audio with this file?')) {e.target.value='';return;}
+    clearAudio(); document.querySelector('#audioPreview')?.replaceChildren();
+  });
   let captureSettings;
   api('/ai-settings').then(data => {
     if(captureVersion !== requestVersion) return;
@@ -344,8 +339,7 @@ function capture() {
   document.querySelectorAll("[data-mode]").forEach(
     (b) =>
       (b.onclick = () => {
-        stopRecording();
-        recordingFile = null;
+        if (!leaveCapture()) return;
         mode = b.dataset.mode;
         render();
       }),
@@ -354,9 +348,9 @@ function capture() {
   document.querySelector("#capture").onsubmit = (e) => {
     e.preventDefault();
     safe(e.submitter, async () => {
-      if (recorder?.state === "recording")
+      if (recordingPending || recorder?.state === "recording" || recorder?.state === "paused")
         throw new Error("Stop the recording before saving.");
-      const title = document.querySelector("#title").value.trim(),
+      const title = document.querySelector("#title").value.trim() || `${names[document.querySelector("#captureTheme").value] || "New"} conversation · ${new Date().toLocaleDateString()}`,
         theme_id = document.querySelector("#captureTheme").value,
         event_at = eventISO(document.querySelector("#event").value);
       if (!title || !theme_id)
@@ -384,76 +378,61 @@ function capture() {
         data.set("event_at", event_at);
         entry = await api("/entries/upload", { method: "POST", body: data });
       }
+      if (captureVersion !== requestVersion) return;
       document.querySelector("#captureResult").innerHTML =
         `<p class="success">${entry.duplicate ? "Already saved. Opening the existing entry with its original processing settings." : "Saved. Processing will run automatically."}</p>`;
+      clearAudio();
       await openEntry(entry.id);
     });
   };
 }
 async function recordAudio(e) {
-  const button = e.target;
-  if (recorder?.state === "recording") {
-    recorder.stop();
-    button.disabled = true;
-    return;
-  }
+  const button=e.currentTarget;
+  if (recorder && recorder.state!=='inactive') { recorder.stop(); button.disabled=true; return; }
+  if(recordingFile && !confirm('Replace your unsaved recording?')) return;
+  const version=requestVersion;
+  button.disabled=true; recordingPending=true;
   try {
-    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder)
-      throw new Error(
-        "Recording is unavailable in this browser. Upload an audio file instead.",
-      );
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const type = [
-      "audio/webm;codecs=opus",
-      "audio/mp4",
-      "audio/ogg;codecs=opus",
-    ].find((t) => MediaRecorder.isTypeSupported(t));
-    recorder = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
-    const parts = [];
-    recorder.ondataavailable = (e) => {
-      if (e.data.size) parts.push(e.data);
+    if(!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) throw new Error('Recording is unavailable. Upload an audio file instead.');
+    const acquired=await navigator.mediaDevices.getUserMedia({audio:true});
+    if(version!==requestVersion){acquired.getTracks().forEach(t=>t.stop());return;}
+    stream=acquired; clearAudio(); document.querySelector('#file').value='';
+    document.querySelector('#audioPreview').replaceChildren();
+    const type=['audio/webm;codecs=opus','audio/mp4','audio/ogg;codecs=opus'].find(t=>MediaRecorder.isTypeSupported(t));
+    const active=new MediaRecorder(stream,type?{mimeType:type}:undefined); recorder=active;
+    const parts=[]; let seconds=0, size=0;
+    const pause=document.querySelector('#pauseRecord');pause.hidden=false;pause.textContent='Pause';
+    document.querySelector('#file').disabled=true;
+    active.ondataavailable=e=>{if(e.data.size){parts.push(e.data);size+=e.data.size;}};
+    active.onstop=()=>{
+      clearInterval(recordTimer);acquired.getTracks().forEach(t=>t.stop());
+      if(version!==requestVersion)return;
+      const mime=active.mimeType,ext=mime.includes('mp4')?'m4a':mime.includes('ogg')?'ogg':'webm';
+      recordingFile=new File(parts,`recording.${ext}`,{type:mime});
+      previewURL=URL.createObjectURL(recordingFile);
+      button.disabled=false;button.textContent='Record again';button.classList.remove('is-recording');button.classList.add('has-recording');pause.hidden=true;
+      document.querySelector('#file').disabled=false;
+      document.querySelector('#recordState').textContent='Recording ready. Listen before saving.';
+      document.querySelector('#audioPreview').innerHTML=`<audio controls src="${previewURL}" aria-label="Recording playback"></audio><button type="button" class="link" id="discardAudio">Discard recording</button>`;
+      document.querySelector('#discardAudio').onclick=()=>{clearAudio();document.querySelector('#audioPreview').replaceChildren();button.textContent='Record conversation';button.classList.remove('has-recording');document.querySelector('#recordState').textContent='Ready when you are.';};
     };
-    recorder.onstop = () => {
-      clearInterval(recordTimer);
-      stream?.getTracks().forEach((t) => t.stop());
-      const mime = recorder.mimeType,
-        extension = mime.includes("mp4")
-          ? "m4a"
-          : mime.includes("ogg")
-            ? "ogg"
-            : "webm";
-      recordingFile = new File(parts, `recording.${extension}`, { type: mime });
-      if (button.isConnected) {
-        button.disabled = false;
-        button.textContent = "Record again";
-        document.querySelector("#recordState").textContent =
-          `Recording ready · ${(recordingFile.size / 1024 / 1024).toFixed(1)} MB`;
-      }
-    };
-    recorder.start(1000);
-    button.textContent = "Stop recording";
-    let seconds = 0;
-    recordTimer = setInterval(() => {
-      seconds++;
-      const node = document.querySelector("#recordState");
-      if (node)
-        node.textContent = `Recording · ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
-      if (parts.reduce((sum, b) => sum + b.size, 0) > 24 * 1024 * 1024)
-        recorder.stop();
-    }, 1000);
-  } catch (e) {
-    stream?.getTracks().forEach((t) => t.stop());
-    message(
-      e.name === "NotAllowedError"
-        ? "Microphone permission was denied. Allow access or upload an audio file."
-        : e.message,
-    );
-  }
+    active.start(1000);button.textContent='Finish recording';button.classList.remove('has-recording');button.classList.add('is-recording');
+    document.querySelector('#recordState').textContent='Recording · 0:00';
+    recordTimer=setInterval(()=>{
+      if(active.state==='recording')seconds++;
+      const node=document.querySelector('#recordState');
+      if(node)node.textContent=`${active.state==='paused'?'Paused':'Recording'} · ${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')}`;
+      if(size>24*1024*1024 && active.state!=='inactive')active.stop();
+    },1000);
+  } catch(error) {
+    stream?.getTracks().forEach(t=>t.stop());
+    if(version===requestVersion)message(error.name==='NotAllowedError'?'Allow microphone access to record, or upload a file.':error.message);
+  } finally {recordingPending=false;if(button.isConnected)button.disabled=false;}
 }
 function stopRecording() {
   clearInterval(recordTimer);
-  if (recorder?.state === "recording") recorder.stop();
-  stream?.getTracks().forEach((t) => t.stop());
+  if(recorder){recorder.onstop=null;if(recorder.state!=='inactive')recorder.stop();}
+  stream?.getTracks().forEach(t=>t.stop());
 }
 function ask() {
   document.querySelector("#panel").innerHTML =
@@ -523,12 +502,13 @@ async function library(version, offset = 0) {
   const panel = document.querySelector("#panel");
   panel.innerHTML = '<p class="muted" role="status">Loading your entries…</p>';
   try {
-    const rows = await api(`/entries?limit=20&offset=${offset}${scope()}`);
+    const rows = await api(`/entries?limit=20&offset=${offset}&q=${encodeURIComponent(libraryQuery)}${scope()}`);
     if (version !== requestVersion) return;
-    panel.innerHTML = `<div class="row spread" style="margin-bottom:18px"><span class="helper">${esc(theme ? names[theme] : "All themes")} · Page ${offset / 20 + 1}</span>${btn("Refresh", "secondary", 'id="refresh"')}</div>${rows.length ? rows.map((r) => `<button class="entry" data-entry="${esc(r.id)}"><div class="row spread">${badge(r.theme_id)}<span class="pill ${esc(r.status)}">${esc(r.status)}</span></div><h3>${esc(r.title)}</h3><p class="meta">${esc(r.input_type || "text")} · ${date(r.event_at || r.uploaded_at)}</p><p class="muted">${esc((r.original_text || "").slice(0, 150))}${(r.original_text || "").length > 150 ? "…" : ""}</p></button>`).join("") : '<div class="card empty">Nothing saved here yet. Capture a conversation to start your memory.</div>'}<div class="row">${offset ? btn("Previous", "secondary", 'id="prev"') : ""}${rows.length === 20 ? btn("Next page", "secondary", 'id="next"') : ""}</div>`;
+    panel.innerHTML = `<form id="conversationSearch" class="row library-search"><input id="libraryQuery" type="search" aria-label="Search conversations" placeholder="Search titles and transcripts" maxlength="200" value="${esc(libraryQuery)}">${btn("Search","secondary")}</form><div class="row spread" style="margin-bottom:18px"><span class="helper">${esc(theme ? names[theme] : "All themes")} · Page ${offset / 20 + 1}</span>${btn("Refresh", "secondary", 'id="refresh"')}</div>${rows.length ? rows.map((r) => `<button class="entry" data-entry="${esc(r.id)}"><div class="row spread">${badge(r.theme_id)}<span class="pill ${esc(r.status)}">${esc(r.status)}</span></div><h3>${esc(r.title)}</h3><p class="meta">${esc(r.input_type || "text")} · ${date(r.event_at || r.uploaded_at)}</p><p class="muted">${esc((r.original_text || "").slice(0, 150))}${(r.original_text || "").length > 150 ? "…" : ""}</p></button>`).join("") : '<div class="card empty">Nothing saved here yet. Capture a conversation to start your memory.</div>'}<div class="row">${offset ? btn("Previous", "secondary", 'id="prev"') : ""}${rows.length === 20 ? btn("Next page", "secondary", 'id="next"') : ""}</div>`;
     panel
       .querySelectorAll("[data-entry]")
       .forEach((b) => (b.onclick = () => openEntry(b.dataset.entry)));
+    document.querySelector('#conversationSearch').onsubmit=e=>{e.preventDefault();libraryQuery=document.querySelector('#libraryQuery').value;library(++requestVersion,0);};
     document.querySelector("#refresh").onclick = () => library(version, offset);
     document
       .querySelector("#prev")
@@ -559,7 +539,7 @@ async function openEntry(id) {
       api("/entries/" + id + "/knowledge"),
     ]);
     if (version !== requestVersion) return;
-    area.innerHTML = `${btn("← Back to library", "link", 'id="back"')}<div class="intro"><h1>${esc(entry.title)}</h1><div class="row">${badge(entry.theme_id)}<span class="pill ${esc(entry.status)}">${esc(entry.status)}</span><span class="meta">${date(entry.event_at || entry.uploaded_at)}</span></div></div>${entry.status === "failed" ? `<div class="error">Processing failed: ${esc(entry.job?.error || "Unknown error")}. ${btn("Retry processing", "secondary", 'id="retry"')}</div>` : ""}${["queued", "processing"].includes(entry.status) ? `<p class="notice" role="status">${esc(entry.job?.stage || "queued")} · Processing automatically. This page will update when it is ready.</p>` : ""}${processingDetails(entry)}${knowledge.summary ? `<section class="card soft"><span class="eyebrow">The essentials</span><p>${esc(knowledge.summary)}</p></section>` : ""}${knowledge.items.length ? `<h2>What to remember</h2>${knowledge.items.map((item) => itemCard(item, true)).join("")}` : ""}<section class="card"><h2>Original ${entry.input_type === "audio" ? "transcript" : "text"}</h2><p class="text">${esc(entry.original_text || "Available after processing.")}</p>${entry.input_type !== "text" ? btn("Download original file", "secondary", 'id="download"') : ""}</section>${knowledge.english_text ? `<section class="card"><h2>English version</h2><p class="text">${esc(knowledge.english_text)}</p></section>` : ""}${entry.index_status === "failed" ? `<p class="notice">Semantic indexing failed. ${btn("Retry indexing", "secondary", 'id="indexRetry"')}</p>` : ""}`;
+    area.innerHTML = `${btn("← Conversations", "link", 'id="back"')}<div class="intro"><h1>${esc(entry.title)}</h1><div class="row">${badge(entry.theme_id)}<span class="pill ${esc(entry.status)}">${esc(entry.status)}</span><span class="meta">${date(entry.event_at || entry.uploaded_at)}</span></div></div>${entry.status === "failed" ? `<div class="error">Processing failed: ${esc(entry.job?.error || "Unknown error")}. ${btn("Retry processing", "secondary", 'id="retry"')}</div>` : ""}${["queued", "processing"].includes(entry.status) ? `<p class="notice" role="status">Preparing your notes… This page updates automatically.</p>` : ""}${processingDetails(entry)}${knowledge.summary ? `<section class="card soft"><span class="eyebrow">The essentials</span><p>${esc(knowledge.summary)}</p></section>` : ""}${knowledge.items.length ? `<h2>What to remember</h2>${knowledge.items.map((item) => itemCard(item, true)).join("")}` : ""}<section class="card"><h2>Original ${entry.input_type === "audio" ? "transcript" : "text"}</h2><p class="text">${esc(entry.original_text || "Available after processing.")}</p>${entry.input_type !== "text" ? btn("Download original file", "secondary", 'id="download"') : ""}</section>${knowledge.english_text ? `<section class="card"><h2>English version</h2><p class="text">${esc(knowledge.english_text)}</p></section>` : ""}${entry.index_status === "failed" ? `<p class="notice">Semantic indexing failed. ${btn("Retry indexing", "secondary", 'id="indexRetry"')}</p>` : ""}`;
     document.querySelector("#back").onclick = () => {
       screen = "Library";
       render();
@@ -645,7 +625,7 @@ function wireItems(items, reload) {
 }
 async function actions(version) {
   document.querySelector("#panel").innerHTML =
-    `<div class="tabs">${["active", "completed", "dismissed"].map((s) => btn(s[0].toUpperCase() + s.slice(1), actionStatus === s ? "active" : "", `data-filter="${s}"`)).join("")}</div><div id="actionRows" role="status">Loading commitments…</div>`;
+    `<div class="tabs">${["active", "completed", "dismissed"].map((s) => btn(s[0].toUpperCase() + s.slice(1), actionStatus === s ? "active" : "", `data-filter="${s}"`)).join("")}</div><div id="actionRows" role="status">Loading to-dos…</div><div id="attentionRows"></div>`;
   document.querySelectorAll("[data-filter]").forEach(
     (b) =>
       (b.onclick = () => {
@@ -658,11 +638,15 @@ async function actions(version) {
       `/actions?limit=100&status=${actionStatus}${scope()}`,
     );
     if (version !== requestVersion) return;
-    document.querySelector("#actionRows").innerHTML = items.length
-      ? items.map((i) => itemCard(i)).join("")
-      : '<div class="card empty">No ' +
-        actionStatus +
-        " commitments in this theme.</div>";
+    const today=localNow().slice(0,10);
+    const groups=actionStatus==='active' ? [
+      ['Overdue',items.filter(i=>i.certainty!=='tentative' && i.due_date && i.due_date<today)],
+      ['Today',items.filter(i=>i.certainty!=='tentative' && i.due_date===today)],
+      ['Upcoming',items.filter(i=>i.certainty!=='tentative' && i.due_date>today)],
+      ['No date',items.filter(i=>i.certainty!=='tentative' && !i.due_date)],
+      ['Tentative · needs confirmation',items.filter(i=>i.certainty==='tentative')]
+    ] : [[actionStatus==='completed'?'Completed':'Dismissed',items]];
+    document.querySelector('#actionRows').innerHTML=items.length?groups.filter(([,rows])=>rows.length).map(([label,rows])=>`<section class="todo-group"><h2>${label}<span class="count">${rows.length}</span></h2>${rows.sort((a,b)=>(a.due_date||'').localeCompare(b.due_date||'')).map(i=>`<article class="todo-row">${btn(i.status==='active'?'○':'✓','check-button',`data-status="${i.status==='active'?'completed':'active'}" data-item="${esc(i.id)}" aria-label="${i.status==='active'?'Complete':'Reopen'}: ${esc(i.text)}"`)}<details><summary>${esc(i.text)}<span class="todo-meta">${badge(i.theme_id)}<span class="${i.due_date && i.due_date<today && i.status==='active'?'overdue':''}">${esc(due(i))}</span>${i.owner?`<span>${esc(i.owner)}</span>`:''}</span></summary><blockquote class="quote">${esc(i.evidence)}</blockquote><div class="row">${btn('Open conversation','link',`data-entry="${esc(i.source_entry_id)}"`)}${btn('Correct','link',`data-edit="${esc(i.id)}"`)}${i.status==='active'?btn('Dismiss','link',`data-status="dismissed" data-item="${esc(i.id)}"`):''}</div></details></article>`).join('')}</section>`).join(''):'<div class="empty">No '+actionStatus+' to-dos here.</div>';
     if (items.length === 100)
       document
         .querySelector("#actionRows")
@@ -671,6 +655,11 @@ async function actions(version) {
           '<p class="notice">Showing the first 100 actions.</p>',
         );
     wireItems(items, () => actions(version));
+    const recent=await api(`/entries?limit=100${scope()}`);
+    if(version!==requestVersion)return;
+    const attention=recent.filter(r=>['failed','queued','processing'].includes(r.status));
+    document.querySelector('#attentionRows').innerHTML=attention.length?`<section class="card sectiongap"><h2>Recent conversations to check</h2>${attention.slice(0,5).map(r=>`<button class="entry" data-attention="${esc(r.id)}"><strong>${esc(r.title)}</strong><p class="meta">${r.status==='failed'?'Processing needs attention':'Preparing your notes…'}</p></button>`).join('')}${attention.length>5?'<p class="helper">More conversations are waiting in Conversations.</p>':''}</section>`:'';
+    root.querySelectorAll('[data-attention]').forEach(b=>b.onclick=()=>openEntry(b.dataset.attention));
   } catch (e) {
     if (version === requestVersion) message(e.message);
   }
@@ -798,7 +787,11 @@ function readModels(prefix){
 }
 function languageControls(){return `<fieldset class="languages"><legend>Expected languages</legend><p class="helper">Leave unchecked for automatic detection. For mixed speech, select all expected languages.</p>${Object.entries({en:'English',hi:'Hindi',mr:'Marathi'}).map(([id,name])=>`<label><input type="checkbox" name="language" value="${id}"> ${name}</label>`).join('')}</fieldset>`}
 async function settingsScreen(version){
-  const panel=document.querySelector('#panel');panel.innerHTML='<p role="status">Loading AI settings…</p>';
+  const host=document.querySelector('#panel');
+  host.innerHTML=`<section class="card appearance-card"><h2>Appearance</h2><label for="appearance">Colour mode</label><select id="appearance">${['system','light','dark'].map(x=>`<option value="${x}" ${appearance===x?'selected':''}>${x[0].toUpperCase()+x.slice(1)}</option>`).join('')}</select><div class="row spread sectiongap"><span class="helper">${esc(session.user.email)}</span>${btn('Sign out','link','id="logout"')}</div></section><details class="card"><summary>AI model defaults</summary><div id="aiPanel"><p role="status">Loading AI settings…</p></div></details>`;
+  document.querySelector('#appearance').onchange=e=>{appearance=e.target.value;try{localStorage.setItem('memory-appearance',appearance);}catch{}applyAppearance();};
+  document.querySelector('#logout').onclick=logout;
+  const panel=document.querySelector('#aiPanel');
   try{
     const data=await api('/ai-settings');if(version!==requestVersion)return;
     const providers=[...new Set(data.catalog.map(x=>x.provider))];
