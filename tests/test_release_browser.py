@@ -22,9 +22,9 @@ from app.memories import evidence_for
 @pytest.mark.skipif(os.getenv('RUN_RELEASE_BROWSER')!='1',reason='Opt-in browser/HTTP release integration')
 def test_browser_against_real_chat_api(tmp_path,monkeypatch):
     def encode(x):return base64.urlsafe_b64encode(json.dumps(x).encode()).decode().rstrip('=')
-    token=encode({'alg':'ES256','typ':'JWT'})+'.'+encode({'sub':'owner','aud':'authenticated','role':'authenticated','aal':'aal2','iss':'https://example.supabase.co/auth/v1','exp':int(time.time())+3600,'iat':int(time.time()),'amr':[{'method':'password'},{'method':'totp'}]})+'.test-signature'
+    token=encode({'alg':'ES256','typ':'JWT'})+'.'+encode({'sub':'11111111-1111-4111-8111-111111111111','aud':'authenticated','role':'authenticated','aal':'aal2','iss':'https://example.supabase.co/auth/v1','exp':int(time.time())+3600,'iat':int(time.time()),'amr':[{'method':'password'},{'method':'totp'}]})+'.test-signature'
     url=f'sqlite:///{tmp_path}/release.db'
-    for k,v in {'DATABASE_URL':url,'OWNER_API_TOKEN':token,'ALLOW_OWNER_API_TOKEN':'true','SUPABASE_URL':'https://example.supabase.co','SUPABASE_PUBLISHABLE_KEY':'sb_publishable_test','AUTH_OWNER_USER_ID':'owner','MEMORIES_ENABLED':'true','APP_ENV':'development','GEMINI_API_KEY':'test-only','GENERATION_MODEL':'test-model'}.items():monkeypatch.setenv(k,v)
+    for k,v in {'DATABASE_URL':url,'OWNER_API_TOKEN':token,'ALLOW_OWNER_API_TOKEN':'true','SUPABASE_URL':'https://example.supabase.co','SUPABASE_PUBLISHABLE_KEY':'sb_publishable_test','AUTH_OWNER_USER_ID':'11111111-1111-4111-8111-111111111111','MEMORIES_ENABLED':'true','APP_ENV':'development','GEMINI_API_KEY':'test-only','GENERATION_MODEL':'test-model'}.items():monkeypatch.setenv(k,v)
     monkeypatch.delenv('REDIS_URL',raising=False)
     command.upgrade(Config('alembic.ini'),'head')
     contexts=[]

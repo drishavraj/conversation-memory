@@ -122,11 +122,12 @@ def test_pending_turn_rejects_second_message_and_duplicate_is_read_only(client,h
     result=send(client,headers,t['id'],rid=rid)
     assert result.json()['turn']['status']=='completed';assert seen==['running',409];assert len(answers.calls)==1
 
-def test_chat_migration_roundtrip_preserves_existing_memories(client,headers):
+def test_migration_head_is_idempotent_and_preserves_existing_memories(client,headers):
     from alembic import command
     from alembic.config import Config
     p,topic,k=setup(client,headers)
-    cfg=Config('alembic.ini');command.downgrade(cfg,'0007');command.upgrade(cfg,'head')
+    # Tenant ownership migrations deliberately prohibit destructive downgrades.
+    cfg=Config('alembic.ini');command.upgrade(cfg,'head')
     assert detail(client,headers,p)['memories']
     assert thread(client,headers,p,topic)['version']==0
 

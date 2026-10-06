@@ -3,7 +3,7 @@ const {chromium}=require('playwright');
  const browser=await chromium.launch();const page=await browser.newPage({viewport:{width:1280,height:900}});page.setDefaultTimeout(12000);
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
  const token=process.env.RELEASE_TEST_TOKEN;
- const user={id:'owner',email:'owner@example.com',aud:'authenticated',role:'authenticated',app_metadata:{},user_metadata:{full_name:'Release Owner'}};
+ const user={id:'11111111-1111-4111-8111-111111111111',email:'owner@example.com',aud:'authenticated',role:'authenticated',app_metadata:{},user_metadata:{full_name:'Release Owner'}};
  await page.addInitScript(({token,user})=>localStorage.setItem('sb-example-auth-token',JSON.stringify({access_token:token,refresh_token:'test-refresh',expires_in:3600,expires_at:Math.floor(Date.now()/1000)+3600,token_type:'bearer',user})),{token,user});
  await page.route('https://example.supabase.co/**',r=>r.fulfill({json:{user,all:[],totp:[],phone:[]}}));
  await page.goto(process.env.UI_BASE_URL);

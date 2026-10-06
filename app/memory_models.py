@@ -3,11 +3,11 @@ from sqlalchemy import String, Text, JSON, ForeignKey, UniqueConstraint, DateTim
 from sqlalchemy.orm import Mapped, mapped_column
 from uuid import uuid4
 from datetime import datetime
-from .models import Base, now
+from .models import Base, now, WorkspaceOwned
 
 def uid(): return str(uuid4())
 
-class Project(Base):
+class Project(WorkspaceOwned, Base):
     __tablename__='memory_projects'
     __table_args__=(UniqueConstraint('theme_id','name_key'),)
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=uid)
@@ -17,7 +17,7 @@ class Project(Base):
     description: Mapped[str]=mapped_column(Text,default='')
     created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now)
 
-class Topic(Base):
+class Topic(WorkspaceOwned, Base):
     __tablename__='memory_topics'
     __table_args__=(UniqueConstraint('project_id','name_key'),)
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=uid)
@@ -26,7 +26,7 @@ class Topic(Base):
     name_key: Mapped[str]=mapped_column(String(100))
     created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now)
 
-class ProjectEntry(Base):
+class ProjectEntry(WorkspaceOwned, Base):
     __tablename__='memory_project_entries'
     project_id: Mapped[str]=mapped_column(ForeignKey('memory_projects.id'),primary_key=True)
     entry_id: Mapped[str]=mapped_column(ForeignKey('entries.id'),primary_key=True)
@@ -38,7 +38,7 @@ class ProjectEntry(Base):
     claimed_at: Mapped[datetime | None]=mapped_column(DateTime(timezone=True),nullable=True)
     created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now)
 
-class MemoryRecord(Base):
+class MemoryRecord(WorkspaceOwned, Base):
     __tablename__='memory_records'
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=uid)
     project_id: Mapped[str]=mapped_column(ForeignKey('memory_projects.id'),index=True)
@@ -50,7 +50,7 @@ class MemoryRecord(Base):
     version: Mapped[int]=mapped_column(default=1)
     updated_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now)
 
-class MemoryProposal(Base):
+class MemoryProposal(WorkspaceOwned, Base):
     __tablename__='memory_proposals'
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=uid)
     project_id: Mapped[str]=mapped_column(ForeignKey('memory_projects.id'),index=True)
@@ -61,7 +61,7 @@ class MemoryProposal(Base):
     status: Mapped[str]=mapped_column(String(20),default='pending')
     created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now)
 
-class MemoryRevision(Base):
+class MemoryRevision(WorkspaceOwned, Base):
     __tablename__='memory_revisions'
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=uid)
     memory_id: Mapped[str]=mapped_column(ForeignKey('memory_records.id'),index=True)
@@ -70,7 +70,7 @@ class MemoryRevision(Base):
     reason: Mapped[str]=mapped_column(Text)
     created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now)
 
-class ChatThread(Base):
+class ChatThread(WorkspaceOwned, Base):
     __tablename__='memory_chat_threads'
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=uid)
     project_id: Mapped[str]=mapped_column(ForeignKey('memory_projects.id'),index=True)
@@ -81,7 +81,7 @@ class ChatThread(Base):
     created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now)
     updated_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now,index=True)
 
-class ChatTurn(Base):
+class ChatTurn(WorkspaceOwned, Base):
     __tablename__='memory_chat_turns'
     __table_args__=(UniqueConstraint('thread_id','request_id'),UniqueConstraint('thread_id','sequence'))
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=uid)
