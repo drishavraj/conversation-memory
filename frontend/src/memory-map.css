@@ -1,0 +1,33 @@
+/* Phase 3: spatial exploration, separate from shared app components. */
+#memoryWorkspace .memory-layout{display:grid;grid-template-columns:minmax(0,1fr);gap:0;align-items:start}
+#memoryWorkspace.memory-detail-open .memory-layout{grid-template-columns:minmax(260px,1fr) 380px}
+#memoryStage{min-width:0;position:relative}
+#memoryViewport{height:540px;position:relative;overflow:hidden;touch-action:none;border-radius:16px;background:radial-gradient(ellipse at 50% 45%,color-mix(in srgb,var(--soft) 45%,transparent),transparent 70%)}
+#memoryViewport:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+#memoryClouds.memory-clouds{display:block;position:absolute;inset:0;min-height:0;padding:0;transform-origin:0 0;will-change:transform}
+#memoryClouds .memory-cloud{position:absolute;transform:translate(-50%,-50%);min-height:0;padding:20px;gap:8px;border:0;background:none;border-radius:44%;display:flex;align-items:center;justify-content:center;text-align:center;flex-direction:column;--memory-tint:light-dark(#dce8e3,#293d35)}
+#memoryClouds .memory-cloud[data-theme="personal"]{--memory-tint:light-dark(#eee4d5,#443b2e)}
+#memoryClouds .memory-cloud[data-theme="side-projects"]{--memory-tint:light-dark(#e6dfef,#3a3145)}
+#memoryClouds .memory-cloud::before{border-radius:43% 57% 62% 38% / 56% 45% 55% 44%;background:radial-gradient(ellipse at 30% 10%,color-mix(in srgb,var(--surface) 50%,transparent),transparent 75%),var(--memory-tint);box-shadow:inset 0 1px 1px color-mix(in srgb,var(--text) 8%,transparent),0 12px 28px #00000006}
+#memoryClouds .memory-cloud:nth-child(2n)::before{border-radius:55% 45% 42% 58% / 46% 59% 41% 54%}
+#memoryClouds .memory-cloud strong{font-size:15px;font-weight:500;line-height:1.35;overflow-wrap:anywhere;max-width:100%;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
+#memoryClouds .memory-cloud span{font-size:12px;color:var(--muted)}
+#memoryClouds .memory-cloud.selected::before{outline:1px solid var(--green);outline-offset:4px}
+#memoryMapControls{padding:12px 0;flex-wrap:wrap}#memoryMapControls button{min-width:36px;font-size:12px}#memoryMapControls .helper{font-size:11px;margin-left:auto}
+#memoryViewport.is-list{height:auto;min-height:300px;overflow:visible;touch-action:auto;background:none}
+#memoryClouds.memory-list{position:relative;display:flex;flex-direction:column;gap:10px;inset:auto;transform:none!important;padding:8px 0}
+#memoryClouds.memory-list .memory-cloud{position:relative;left:auto!important;top:auto!important;transform:none;width:100%!important;height:auto!important;min-height:72px;align-items:flex-start;text-align:left;padding:16px 20px}
+#memoryClouds.memory-list .memory-cloud::before{border-radius:10px}#memoryClouds.memory-list .memory-cloud strong{display:block;overflow:visible}
+#memoryRail{padding:16px 0 24px 24px;margin-left:24px;border-left:1px solid var(--line);min-width:0;background:var(--bg);max-height:calc(100dvh - 170px);overflow:auto;scrollbar-gutter:stable}
+#memoryClose{display:inline-block;font-size:12px;padding:6px 8px;border:0;background:transparent}
+#memoryScope{overflow-wrap:anywhere;font-size:12px}
+.memory-pane-tabs{display:flex;gap:4px;margin:16px 0 20px;border-bottom:1px solid var(--line);padding-bottom:8px}
+.memory-pane-tabs button{border:0;background:transparent;padding:6px 10px;font-size:13px}
+.memory-pane-tabs button[aria-pressed="true"]{background:var(--soft)}
+#memoryManagement h2{font-size:16px;margin-top:24px}#memoryManagement .sectiongap{margin-top:0}#memoryManagement button{font-size:12px;padding:7px 10px}
+.memory-linked strong{font-weight:500}#memoryContent h2{font-size:18px}#memoryContent .empty{padding:24px 0;text-align:left}#memoryContent .row{flex-wrap:wrap}#memoryContent textarea{min-height:90px}
+.memory-map-empty{position:relative;max-width:380px;margin:80px auto;padding:24px;text-align:center;color:var(--muted)}.memory-map-empty h2{color:var(--text);font-weight:500}
+@media(max-width:1000px){#memoryWorkspace.memory-detail-open .memory-layout{grid-template-columns:minmax(180px,1fr) 360px}#memoryRail{margin-left:12px;padding-left:16px}}
+@media(max-width:800px){#memoryWorkspace .memory-layout,#memoryWorkspace.memory-detail-open .memory-layout{grid-template-columns:1fr}#memoryWorkspace.memory-detail-open #memoryStage{display:none}#memoryWorkspace:not(.memory-detail-open) #memoryRail{display:none}#memoryRail{margin:0;border:0;padding:12px 0;max-height:none;overflow:visible}#memoryViewport{height:470px}#memoryWorkspace.memory-detail-open .memory-toolbar,#memoryWorkspace.memory-detail-open #memoryBreadcrumb{display:none}#memoryClose{min-height:44px}#memoryMapControls .helper{width:100%;margin:4px 0 0}}
+@media(prefers-reduced-motion:reduce){#memoryClouds .memory-cloud::before{transition:none}}
+@media(min-width:801px){#memoryRail{display:flex;flex-direction:column;overflow:hidden}#memoryRail>.row,#memoryRail>.memory-pane-tabs{flex-shrink:0}#memoryContent,#memoryManagement{overflow:auto;min-height:0;padding-right:4px}}

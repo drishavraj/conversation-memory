@@ -1,4 +1,8 @@
+import { mountChats, clearChatState } from './chat-ui.js';
+let selectedChat=null, chatCleanup;
 import morphdom from "morphdom";
+import { mountMemories } from "./memories-ui.js";
+let memoryCleanup;
 import { processingSteps } from "./processing-progress.js";
 import { createClient } from "@supabase/supabase-js";
 const root = document.querySelector("#app");
@@ -8,7 +12,7 @@ const systemAppearance = matchMedia('(prefers-color-scheme: dark)');
 function applyAppearance() {
   const dark = appearance === 'dark' || (appearance === 'system' && systemAppearance.matches);
   document.documentElement.dataset.appearance = dark ? 'dark' : 'light';
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#111416' : '#f7f8fa');
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#191a1b' : '#faf9f6');
 }
 systemAppearance.addEventListener('change', applyAppearance);
 applyAppearance();
@@ -46,6 +50,8 @@ const names = {
 const icon = (path) =>
   `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="${path}" /></svg>`;
 const icons = {
+  Chats: icon("M5 4h14v12H9l-4 4V4Z"),
+  Memories: icon("M12 3a9 9 0 1 0 9 9M12 3v9h9"),
   Settings: icon("M4 7h16M4 17h16M9 4v6M15 14v6"),
   Capture: icon("M12 5v14M5 12h14"),
   Ask: icon("M5 4h14v12H9l-4 4V4Z"),
@@ -123,7 +129,7 @@ async function api(path, options = {}) {
   };
   if (options.body && !(options.body instanceof FormData))
     headers["Content-Type"] = "application/json";
-  const { onUploadProgress, ...requestOptions } = options;
+  const { onUploadProgress, raw, ...requestOptions } = options;
   const response = onUploadProgress ? await new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open(requestOptions.method || 'POST', '/api' + path);
@@ -134,6 +140,7 @@ async function api(path, options = {}) {
     xhr.onabort = () => reject(new Error('Upload cancelled. Please try again.'));
     xhr.send(requestOptions.body);
   }) : await fetch("/api" + path, { ...requestOptions, headers });
+  if(raw&&response.ok)return response;
   let body;
   try {
     body = await response.json();
@@ -183,11 +190,13 @@ async function safe(button, work) {
   }
 }
 async function showAuth() {
+  memoryCleanup?.();memoryCleanup=null;chatCleanup?.();chatCleanup=null;
   stopRecording(); clearAudio();
   clearTimeout(refreshTimer);
   requestVersion++;
   const { data } = await auth.auth.getSession();
   session = data.session;
+  if(!session){clearChatState();selectedChat=null;}
   qr = null;
   secret = null;
   factor = null;
@@ -314,24 +323,44 @@ function wireVerify() {
 async function logout() {
   if (!leaveCapture()) return;
   await auth.auth.signOut();
+  clearChatState();selectedChat=null;
   await showAuth();
 }
-const navNames = {Actions:'To-dos', Capture:'Record', Library:'Conversations'};
+const navNames = {Capture:'Record', Actions:'To-dos', Memories:'Memories', Chats:'Chats', Library:'Conversations'};
+const screenTitles = {Capture:'Record a conversation',Actions:'To-dos',Library:'Conversations',Ask:'Ask your memory',Settings:'Settings',Memories:'Memories',Chats:'Chats'};
+function closeAccount() { const menu=document.querySelector('#accountMenu'); if(menu)menu.hidden=true; document.querySelector('#accountToggle')?.setAttribute('aria-expanded','false'); }
+root.addEventListener('click',e=>{if(!e.target.closest('.account-dock'))closeAccount();});
+root.addEventListener('keydown',e=>{if(e.key==='Escape'&&!document.querySelector('#accountMenu')?.hidden){closeAccount();document.querySelector('#accountToggle')?.focus();}});
+function updateShellHeader() { document.querySelector('#pageTitle').textContent=screenTitles[screen]||'Memory'; document.querySelector('.main').dataset.screen=screen; document.querySelector('#theme').hidden=['Settings','Chats'].includes(screen); root.querySelectorAll('[data-nav]').forEach(b=>{if(b.dataset.nav===(screen==='Ask'?'Library':screen))b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');}); }
 function navigate(next) {
   if (!leaveCapture()) return;
+  if(next==='Chats')selectedChat=null;
   screen = next; render();
 }
+function openChat(id){if(!leaveCapture())return;selectedChat=id;screen='Chats';render();}
+async function refreshRecent(){if(!config?.memories_enabled||!document.querySelector('#recentChats'))return;try{const d=await api('/memories/chats?limit=4');const el=document.querySelector('#recentChats');if(!el)return;el.innerHTML=d.items.map(t=>`<button data-recent-chat="${esc(t.id)}" title="${esc(t.title)}">${esc(t.title)}</button>`).join('')||'<span class="helper">No saved chats yet</span>';el.querySelectorAll('button').forEach(b=>b.onclick=()=>openChat(b.dataset.recentChat));}catch{/* Main Chats screen provides errors and retry. */}}
 function shell() {
-  root.innerHTML = `<div class="shell"><aside class="sidebar"><div class="brand"><img src="/ui/icon.svg" alt="">Memory</div><nav class="nav" aria-label="Main navigation">${Object.entries(navNames).map(([id,label])=>btn(`${icons[id]}<span>${label}</span>`,'',`data-nav="${id}"`)).join('')}</nav><footer><span class="helper">Your conversations. Your space.</span></footer></aside><main class="main">${config.environment && config.environment !== 'production' ? `<div class="env-banner">${esc(config.environment.toUpperCase())} · Test environment</div>` : ''}<header class="topbar"><span class="brand compact">Memory</span><div class="row"><select id="theme" aria-label="Current theme"><option value="">All themes</option>${Object.entries(names).map(([id,n])=>`<option value="${id}" ${theme===id?'selected':''}>${n}</option>`).join('')}</select>${btn(icons.Settings,'icon-button','id="settingsNav" aria-label="Settings"')}</div></header><div id="content"></div></main></div>`;
-  document.querySelector('#settingsNav').onclick = () => navigate('Settings');
+  const email=session.user.email||'';
+  const metadata=session.user.user_metadata||{};
+  const displayName=String(metadata.full_name||metadata.name||email.split('@')[0]||'Your account');
+  const initials=displayName.trim().split(/\s+/).slice(0,2).map(x=>x[0]||'').join('').toUpperCase();
+  const environment=config.environment&&config.environment!=='production'?`<span class="env-badge" aria-label="${esc(config.environment)} environment">${esc(config.environment==='development'?'DEV':config.environment.toUpperCase())}</span>`:'';
+  let collapsed=false;try{collapsed=localStorage.getItem('memory-sidebar-collapsed')==='true';}catch{}
+  root.innerHTML = `<div class="shell ${collapsed?'sidebar-collapsed':''}"><aside class="sidebar"><div class="brand-row"><div class="brand"><span class="brand-word">Memory</span>${environment}</div>${btn('‹','sidebar-toggle','id="sidebarToggle" aria-label="Toggle sidebar" aria-expanded="'+!collapsed+'"')}</div><nav class="nav" aria-label="Main navigation">${Object.entries(navNames).filter(([id])=>!['Memories','Chats'].includes(id)||config.memories_enabled).map(([id,label])=>btn(`${icons[id]}<span>${label}</span>`,'',`data-nav="${id}" aria-label="${label}" title="${label}"`)).join('')}</nav>${config.memories_enabled?'<details class="recent-chats" open><summary>Recent chats</summary><div id="recentChats"></div></details>':''}<footer class="account-dock"><div id="accountMenu" class="account-menu" hidden><div class="account-menu-identity"><strong>${esc(displayName)}</strong><span>${esc(email)}</span></div>${btn('Settings','','id="settingsNav"') }<label for="accountAppearance">Appearance</label><select id="accountAppearance">${['system','light','dark'].map(x=>`<option value="${x}" ${appearance===x?'selected':''}>${x[0].toUpperCase()+x.slice(1)}</option>`).join('')}</select>${btn('Sign out','','id="accountLogout"')}</div><button id="accountToggle" class="account-toggle" aria-expanded="false" aria-controls="accountMenu" aria-label="Open account menu"><span class="account-avatar">${esc(initials)}</span><span class="account-identity"><span>${esc(displayName)}</span><small>${esc(email)}</small></span><span class="account-chevron" aria-hidden="true">⌃</span></button></footer></aside><main class="main"><header class="topbar"><div class="page-heading"><h1 id="pageTitle"></h1><span class="mobile-environment">${environment}</span></div><select id="theme" aria-label="Current theme"><option value="">All themes</option>${Object.entries(names).map(([id,n])=>`<option value="${id}" ${theme===id?'selected':''}>${n}</option>`).join('')}</select></header><div id="content"></div></main></div>`;
+  document.querySelector('#settingsNav').onclick = () => {closeAccount();navigate('Settings');};
+  document.querySelector('#accountToggle').onclick=()=>{const menu=document.querySelector('#accountMenu');menu.hidden=!menu.hidden;document.querySelector('#accountToggle').setAttribute('aria-expanded',!menu.hidden);};
+  document.querySelector('#accountLogout').onclick=e=>safe(e.currentTarget,logout);
+  document.querySelector('#accountAppearance').onchange=e=>{appearance=e.target.value;try{localStorage.setItem('memory-appearance',appearance);}catch{}applyAppearance();const settings=document.querySelector('#appearance');if(settings)settings.value=appearance;};
+  document.querySelector('#sidebarToggle').onclick=()=>{const collapsed=document.querySelector('.shell').classList.toggle('sidebar-collapsed');document.querySelector('#sidebarToggle').setAttribute('aria-expanded',!collapsed);try{localStorage.setItem('memory-sidebar-collapsed',collapsed);}catch{}positionCaptureBar();};
   document.querySelector('#theme').onchange = e => {
     if (!leaveCapture()) { e.target.value = theme; return; }
     theme = e.target.value; render();
   };
   root.querySelectorAll('[data-nav]').forEach(b=>b.onclick=()=>navigate(b.dataset.nav));
-  render();
+  render();refreshRecent();
 }
 function render() {
+  memoryCleanup?.();memoryCleanup=null;chatCleanup?.();chatCleanup=null;
   clearTimeout(refreshTimer);
   const version = ++requestVersion;
   root
@@ -339,10 +368,13 @@ function render() {
     .forEach((b) => b.classList.toggle("active", b.dataset.nav === (screen === "Ask" ? "Library" : screen)));
   const area = document.querySelector("#content");
   delete area.dataset.entryId;
-  area.innerHTML = `<div class="intro"><h1>${{Capture:'Record a conversation',Actions:'To-dos',Library:'Conversations',Ask:'Ask your memory',Settings:'Settings'}[screen]}</h1>${screen==='Actions'?btn('Record conversation','primary','id="quickRecord"'):''}</div>${['Library','Ask'].includes(screen)?`<div class="tabs">${btn('Conversations',screen==='Library'?'active':'','data-view="Library"')}${btn('Ask your memory',screen==='Ask'?'active':'','data-view="Ask"')}</div>`:''}<div id="panel"></div>`;
+  closeAccount();updateShellHeader();
+  area.innerHTML = `${screen==='Actions'?`<div class="page-actions">${btn('Record conversation','secondary','id="quickRecord"')}</div>`:''}${['Library','Ask'].includes(screen)?`<div class="tabs">${btn('Conversations',screen==='Library'?'active':'','data-view="Library"')}${btn('Ask your memory',screen==='Ask'?'active':'','data-view="Ask"')}</div>`:''}<div id="panel"></div>`;
   document.querySelector('#quickRecord')?.addEventListener('click',()=>navigate('Capture'));
   root.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>navigate(b.dataset.view));
   ({
+    Chats: () => {chatCleanup=mountChats(document.querySelector('#panel'),{api,esc,threadId:selectedChat,active:()=>version===requestVersion,onChange:refreshRecent});},
+    Memories: () => { memoryCleanup=mountMemories(document.querySelector('#panel'),{api,esc,theme,openEntry,openChat,onChatChange:refreshRecent,active:()=>version===requestVersion}); },
     Capture: capture,
     Ask: ask,
     Library: () => library(version),
@@ -398,7 +430,7 @@ function syncCaptureActions() {
 }
 function capture() {
   const captureVersion = requestVersion;
-  document.querySelector("#panel").innerHTML = `<section class="capture-panel"><div class="tabs capture-tabs">${[['audio','Record / audio'],['text','Text'],['document','Document']].map(([id,label])=>btn(label,mode===id?'active':'',`data-mode="${id}"`)).join('')}</div><form id="capture"><label for="captureTheme">Theme</label><select id="captureTheme" required><option value="">Choose a theme</option>${Object.entries(names).map(([id,n])=>`<option value="${id}" ${theme===id?'selected':''}>${n}</option>`).join('')}</select>${mode==='audio'?`<div class="recorder"><button id="record" type="button" class="record-button">${icon('M9 5a3 3 0 0 1 6 0v7a3 3 0 0 1-6 0V5ZM5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8')}<span>Record conversation</span></button><p id="recordState" role="status">Ready when you are.</p><div id="audioPreview"></div></div><details><summary>Upload an audio file</summary><label for="file">Audio file</label><input id="file" type="file" accept=".mp3,.m4a,.wav,.ogg,.flac,.webm"><p class="helper">Up to 25 MB</p></details>`:mode==='text'?'<label for="transcript">Conversation or note</label><textarea id="transcript" required maxlength="200000" placeholder="Paste a conversation or write a note…"></textarea>':'<label for="file">Document</label><input id="file" type="file" accept=".txt,.pdf,.docx"><p class="helper">TXT, DOCX or text-based PDF · Up to 10 MB</p>'}<details class="capture-details"><summary>Title &amp; date</summary><label for="title">Title (optional)</label><input id="title" maxlength="200" placeholder="A title will be added if left blank"><label for="event">When did it happen?</label><input id="event" type="datetime-local" value="${localNow()}" required><p class="helper">${esc(Intl.DateTimeFormat().resolvedOptions().timeZone)} · Used to interpret dates in the conversation.</p></details><details class="processing-options"><summary>Processing options</summary><div id="processingControls">Loading model choices…</div></details><div id="captureActions" class="capture-actions" aria-label="Conversation actions"><p id="captureHint" class="helper"></p><div class="capture-action-buttons">${mode==='audio'?'<button id="pauseRecord" type="button" class="secondary" hidden>Pause</button><button id="discardAudio" type="button" class="secondary" hidden>Discard recording</button><button id="finishRecord" type="button" class="primary" hidden>Finish recording</button>':''}${btn('Save conversation','primary','id="saveCapture" disabled')}</div><div id="captureResult" aria-live="polite"></div></div></form></section>`;
+  document.querySelector("#panel").innerHTML = `<section class="capture-panel"><div class="tabs capture-tabs">${[['audio','Record / audio'],['text','Text'],['document','Document']].map(([id,label])=>btn(label,mode===id?'active':'',`data-mode="${id}"`)).join('')}</div><form id="capture"><label for="captureTheme">Theme</label><select id="captureTheme" required><option value="">Choose a theme</option>${Object.entries(names).map(([id,n])=>`<option value="${id}" ${theme===id?'selected':''}>${n}</option>`).join('')}</select>${mode==='audio'?`<div class="recorder"><button id="record" type="button" class="record-button">${icon('M9 5a3 3 0 0 1 6 0v7a3 3 0 0 1-6 0V5ZM5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8')}<span>Record conversation</span></button><p id="recordState" role="status">Ready when you are.</p><div id="audioPreview"></div></div><details><summary>Upload an audio file</summary><label for="file">Audio file</label><input id="file" type="file" accept=".mp3,.m4a,.wav,.ogg,.flac,.webm"><p class="helper">Up to 25 MB</p></details>`:mode==='text'?'<label for="transcript">Conversation or note</label><textarea id="transcript" required maxlength="200000" placeholder="Paste a conversation or write a note…"></textarea>':'<label for="file">Document</label><input id="file" type="file" accept=".txt,.pdf,.docx"><p class="helper">TXT, DOCX or text-based PDF · Up to 10 MB</p>'}${config.memories_enabled?'<label for="captureProject">Project (optional)</label><select id="captureProject"><option value="">No project</option></select>':''}<details class="capture-details"><summary>Title &amp; date</summary><label for="title">Title (optional)</label><input id="title" maxlength="200" placeholder="A title will be added if left blank"><label for="event">When did it happen?</label><input id="event" type="datetime-local" value="${localNow()}" required><p class="helper">${esc(Intl.DateTimeFormat().resolvedOptions().timeZone)} · Used to interpret dates in the conversation.</p></details><details class="processing-options"><summary>Processing options</summary><div id="processingControls">Loading model choices…</div></details><div id="captureActions" class="capture-actions" aria-label="Conversation actions"><p id="captureHint" class="helper"></p><div class="capture-action-buttons">${mode==='audio'?'<button id="pauseRecord" type="button" class="secondary" hidden>Pause</button><button id="discardAudio" type="button" class="secondary" hidden>Discard recording</button><button id="finishRecord" type="button" class="primary" hidden>Finish recording</button>':''}${btn('Save conversation','primary','id="saveCapture" disabled')}</div><div id="captureResult" aria-live="polite"></div></div></form></section>`;
   captureBarObserver?.disconnect();
   captureBarObserver = new ResizeObserver(positionCaptureBar);
   for (const selector of ['.capture-panel', '#captureActions', '.sidebar']) captureBarObserver.observe(document.querySelector(selector));
@@ -418,6 +450,17 @@ function capture() {
     if(recordingFile && e.target.files.length && !confirm('Replace the recorded audio with this file?')) {e.target.value='';return;}
     clearAudio(); document.querySelector('#audioPreview')?.replaceChildren(); syncCaptureActions();
   });
+  let captureProjectRequest=0;
+  async function loadCaptureProjects(){
+    if(!config.memories_enabled)return;
+    const selectedTheme=document.querySelector('#captureTheme').value;
+    const sequence=++captureProjectRequest;
+    const select=document.querySelector('#captureProject');select.innerHTML='<option value="">No project</option>';
+    if(!selectedTheme)return;
+    try{const data=await api('/memories/projects?limit=100&theme_id='+selectedTheme);if(captureVersion!==requestVersion||sequence!==captureProjectRequest)return;select.innerHTML='<option value="">No project</option>'+data.items.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');}catch(error){if(captureVersion===requestVersion)message('Could not load projects. You can link the conversation from Memories after saving.');}
+  }
+  document.querySelector('#captureTheme').addEventListener('change',loadCaptureProjects);
+  loadCaptureProjects();
   let captureSettings;
   api('/ai-settings').then(data => {
     if(captureVersion !== requestVersion) return;
@@ -451,6 +494,7 @@ function capture() {
         throw new Error("Add a title and choose a theme.");
       if(!captureSettings) throw new Error('Wait for model choices to load.');
       const processing = {models:readModels('capture'), languages:[...document.querySelectorAll('[name="language"]:checked')].map(x=>x.value)};
+      const selectedProject=document.querySelector('#captureProject')?.value;
       let entry;
       if (mode === "text") {
         const text = document.querySelector("#transcript").value;
@@ -475,8 +519,11 @@ function capture() {
       if (captureVersion !== requestVersion) return;
       document.querySelector("#captureResult").innerHTML =
         `<p class="success">${entry.duplicate ? "Already saved. Opening the existing entry with its original processing settings." : "Saved. Processing will run automatically."}</p>`;
+      let linkingError;
+      if(selectedProject){try{await api(`/memories/projects/${selectedProject}/entries`,{method:'POST',body:JSON.stringify({entry_id:entry.id,topic_ids:[]})});}catch(error){linkingError=error.message;}}
       clearAudio();
       await openEntry(entry.id);
+      if(linkingError)message('Conversation saved, but project linking failed: '+linkingError+'. Link it from Memories.');
     });
   };
 }
@@ -625,8 +672,10 @@ async function library(version, offset = 0) {
   }
 }
 async function openEntry(id) {
+  memoryCleanup?.();memoryCleanup=null;chatCleanup?.();chatCleanup=null;
   clearTimeout(refreshTimer);
   screen = "Library";
+  updateShellHeader();
   root
     .querySelectorAll("[data-nav]")
     .forEach((b) => b.classList.toggle("active", b.dataset.nav === "Library"));
@@ -865,7 +914,7 @@ async function init() {
   }
 }
 
-const taskNames={transcription:'Transcription',translation:'English translation',summary:'Summary',extraction:'Memories, decisions & actions',answer:'Answers to questions'};
+const taskNames={transcription:'Transcription',translation:'English translation',summary:'Summary',extraction:'Memories, decisions & actions',answer:'Answers to questions',reconciliation:'Memory organisation'};
 const fileTasks=['transcription','translation','summary','extraction'];
 function modelKey(choice){return choice.provider+'|'+choice.model}
 function modelControls(data,tasks,prefix){
@@ -893,13 +942,13 @@ function languageControls(){return `<fieldset class="languages"><legend>Expected
 async function settingsScreen(version){
   const host=document.querySelector('#panel');
   host.innerHTML=`<section class="card appearance-card"><h2>Appearance</h2><label for="appearance">Colour mode</label><select id="appearance">${['system','light','dark'].map(x=>`<option value="${x}" ${appearance===x?'selected':''}>${x[0].toUpperCase()+x.slice(1)}</option>`).join('')}</select><div class="row spread sectiongap"><span class="helper">${esc(session.user.email)}</span>${btn('Sign out','link','id="logout"')}</div></section><details class="card"><summary>AI model defaults</summary><div id="aiPanel"><p role="status">Loading AI settings…</p></div></details>`;
-  document.querySelector('#appearance').onchange=e=>{appearance=e.target.value;try{localStorage.setItem('memory-appearance',appearance);}catch{}applyAppearance();};
+  document.querySelector('#appearance').onchange=e=>{appearance=e.target.value;try{localStorage.setItem('memory-appearance',appearance);}catch{}applyAppearance();const account=document.querySelector('#accountAppearance');if(account)account.value=appearance;};
   document.querySelector('#logout').onclick=logout;
   const panel=document.querySelector('#aiPanel');
   try{
     const data=await api('/ai-settings');if(version!==requestVersion)return;
     const providers=[...new Set(data.catalog.map(x=>x.provider))];
-    panel.innerHTML=`<div class="grid"><section class="card"><form id="aiSettings"><h2>Default models</h2><p class="helper">These defaults apply to new uploads. Existing entries keep the choices saved with them. Answer settings apply to your next question.</p>${modelControls(data,Object.keys(taskNames),'defaults')}<div class="sectiongap">${btn('Save defaults')}</div></form><div id="settingsStatus" role="status"></div></section><aside><section class="card soft"><h2>Connected providers</h2>${providers.map(name=>{const row=data.catalog.find(x=>x.provider===name);return `<p><strong>${esc(name)}</strong> · ${row.available?'Key configured':'Key needed'}<br><span class="helper">${esc(row.key_variable)}</span></p>`}).join('')}<p class="helper">Keys are managed in Render. “Key configured” means a key is present; model access and results still need a live test.</p></section><section class="card"><h3>Semantic search</h3><p>${esc(data.embedding.model||'Not configured')}</p><p class="helper">Managed through EMBEDDING_MODEL. Switching embedding models requires reindexing, so this setting stays outside per-upload controls.</p></section><p class="helper">Transcription, translation, summary, and extraction run independently. Choosing different providers sends the relevant source to each selected provider. Separate calls can increase processing time and cost.</p></aside></div>`;
+    panel.innerHTML=`<div class="grid"><section class="card"><form id="aiSettings"><h2>Default models</h2><p class="helper">These defaults apply to new uploads. Existing entries keep the choices saved with them. Answer settings apply to your next question.</p>${modelControls(data,Object.keys(taskNames).filter(task=>data.defaults[task]),'defaults')}<div class="sectiongap">${btn('Save defaults')}</div></form><div id="settingsStatus" role="status"></div></section><aside><section class="card soft"><h2>Connected providers</h2>${providers.map(name=>{const row=data.catalog.find(x=>x.provider===name);return `<p><strong>${esc(name)}</strong> · ${row.available?'Key configured':'Key needed'}<br><span class="helper">${esc(row.key_variable)}</span></p>`}).join('')}<p class="helper">Keys are managed in Render. “Key configured” means a key is present; model access and results still need a live test.</p></section><section class="card"><h3>Semantic search</h3><p>${esc(data.embedding.model||'Not configured')}</p><p class="helper">Managed through EMBEDDING_MODEL. Switching embedding models requires reindexing, so this setting stays outside per-upload controls.</p></section><p class="helper">Transcription, translation, summary, and extraction run independently. Choosing different providers sends the relevant source to each selected provider. Separate calls can increase processing time and cost.</p></aside></div>`;
     wireModelNotes(data,'defaults');
     document.querySelector('#aiSettings').onsubmit=e=>{e.preventDefault();safe(e.submitter,async()=>{
       const updated=await api('/ai-settings',{method:'PUT',body:JSON.stringify({expected_version:data.version,defaults:readModels('defaults')})});

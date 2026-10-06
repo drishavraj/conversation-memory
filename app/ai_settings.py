@@ -9,8 +9,8 @@ from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from .models import AISettings
 
-TASKS = ('transcription', 'translation', 'summary', 'extraction', 'answer')
-FILE_TASKS = TASKS[:-1]
+TASKS = ('transcription', 'translation', 'summary', 'extraction', 'answer', 'reconciliation')
+FILE_TASKS = ('transcription', 'translation', 'summary', 'extraction')
 KEYS = {'gemini':'GEMINI_API_KEY', 'openai':'OPENAI_API_KEY', 'sarvam':'SARVAM_API_KEY'}
 
 class ModelChoice(BaseModel):
@@ -90,8 +90,8 @@ def router_for(authorize,db):
             'embedding':{'provider':'gemini','model':os.getenv('EMBEDDING_MODEL'),'managed_by':'environment'}}
     @router.put('')
     def put_settings(payload:SettingsUpdate,session=Depends(db)):
-        if set(payload.defaults)!=set(TASKS):raise HTTPException(422,'Provide a default for every task')
-        values={k:v.model_dump() for k,v in payload.defaults.items()}
+        if not set(TASKS)-{'reconciliation'} <= set(payload.defaults) or set(payload.defaults)-set(TASKS):raise HTTPException(422,'Provide a default for every task')
+        values={**defaults_for(session)[0],**{k:v.model_dump() for k,v in payload.defaults.items()}}
         validate_choices(values)
         try:
             if payload.expected_version==0:
