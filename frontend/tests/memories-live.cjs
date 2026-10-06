@@ -1,0 +1,138 @@
+const { chromium } = require("playwright");
+const fs = require("fs");
+(async () => {
+  const browser = await chromium.launch({
+    headless: true,
+    args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"],
+    ...(process.env.CHROMIUM_PATH
+      ? { executablePath: process.env.CHROMIUM_PATH }
+      : {}),
+  });
+  const page = await browser.newPage({
+    viewport: { width: 1440, height: 1000 },
+  });
+  page.setDefaultTimeout(7000);
+  page.on("response", (r) => {
+    if (r.status() > 399) console.log(r.status(), r.url());
+  });
+  let errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  const jwt = (claims) =>
+    [
+      "eyJhbGciOiJFUzI1NiJ9",
+      Buffer.from(
+        JSON.stringify({
+          iss: "https://example.supabase.co/auth/v1",
+          aud: "authenticated",
+          sub: "owner",
+          role: "authenticated",
+          exp: Math.floor(Date.now() / 1000) + 3600,
+          iat: Math.floor(Date.now() / 1000),
+          aal: "aal2",
+          amr: [
+            { method: "password", timestamp: Math.floor(Date.now() / 1000) },
+            { method: "totp", timestamp: Math.floor(Date.now() / 1000) },
+          ],
+          ...claims,
+        }),
+      ).toString("base64url"),
+      "c2lnbmF0dXJl",
+    ].join(".");
+  const token = jwt({});
+  const user = {
+    id: "owner",
+    email: "rishav@example.com",
+    aud: "authenticated",
+    role: "authenticated",
+    app_metadata: {},
+    user_metadata: {},
+  };
+  await page.addInitScript(
+    ({ token, user }) =>
+      localStorage.setItem(
+        "sb-example-auth-token",
+        JSON.stringify({
+          access_token: token,
+          refresh_token: "test-refresh",
+          expires_at: Math.floor(Date.now() / 1000) + 3600,
+          expires_in: 3600,
+          token_type: "bearer",
+          user,
+        }),
+      ),
+    { token, user },
+  );
+  const taskList = ['transcription','translation','summary','extraction','answer','reconciliation'];
+  const aiSettings = {
+    version:0,
+    defaults:Object.fromEntries(taskList.map(task=>[task,{provider:'gemini',model:'configured-gemini'}])),
+    catalog:[
+      {provider:'gemini',model:'configured-gemini',tasks:taskList,available:true,key_variable:'GEMINI_API_KEY',note:'Original-language audio and structured text.'},
+      {provider:'openai',model:'gpt-4.1-mini',tasks:taskList.slice(1),available:true,key_variable:'OPENAI_API_KEY',note:'Structured text.'},
+      {provider:'sarvam',model:'saaras:v4',tasks:['transcription'],available:true,key_variable:'SARVAM_API_KEY',note:'Mixed-language batch transcription.'}
+    ],
+    embedding:{model:'configured-embedding'}
+  };
+  let projects=[], topics=[], accepted=false, linked=false;
+  const evidence={id:'k1',version:1,evidence:'We will start with a pilot.',source_entry_id:'e1',source_title:'Pilot review',event_at:'2026-10-06T06:30:00Z'};
+  const memory={id:'m1',text:'Start with a pilot.',kind:'decision',certainty:'explicit',version:1,topic_ids:['t1'],evidence:[evidence],needs_review:false};
+  const proposal={id:'r1',text:memory.text,kind:'decision',certainty:'explicit',operation:'new',reason:'Explicit decision',evidence:[evidence],current:null,stale:false};
+  await page.route('**/api/**',async route=>{
+    const path=new URL(route.request().url()).pathname,method=route.request().method();let data={};
+    if(path==='/api/ui-config')data={environment:'development',configured:true,memories_enabled:true,supabase_url:'https://example.supabase.co',supabase_publishable_key:'sb_publishable_test'};
+    else if(path==='/api/session')data={status:'authenticated'};
+    else if(path==='/api/actions')data=[];
+    else if(path==='/api/ai-settings')data=aiSettings;
+    else if(path==='/api/entries')data=[{id:'e1',title:'Pilot review',status:'ready',theme_id:'office'}];
+    else if(path==='/api/memories/projects'){
+      if(method==='POST'){projects.push({id:'p1',...route.request().postDataJSON()});data=projects[0];}else data={items:projects,has_more:false};
+    }else if(path==='/api/memories/projects/p1/topics'){topics.push({id:'t1',...route.request().postDataJSON()});data=topics[0];}
+    else if(path==='/api/memories/projects/p1/entries'){
+      const body=route.request().postDataJSON();if(body.entry_id!=='e1'||body.topic_ids[0]!=='t1')throw Error('Link lost topic scope');linked=true;data={status:'completed'};
+    }else if(path==='/api/memories/projects/p1/proposals/r1/review'){
+      if(route.request().postDataJSON().decision!=='accept')throw Error('Wrong review action');accepted=true;data={status:'accepted'};
+    }else if(path==='/api/memories/projects/p1/ask'){
+      const body=route.request().postDataJSON();if(body.topic_id!=='t1'||!accepted)throw Error('Ask escaped accepted topic scope');data={status:'answered',claims:[{text:memory.text,source_ids:['m1']}],sources:[memory],pending_changes:0};
+    }else if(path==='/api/memories/projects/p1')data={...projects[0],topics,memories:accepted?[memory]:[],proposals:linked&&!accepted?[proposal]:[],proposal_count:linked&&!accepted?1:0,has_more:false,entries:linked?[{id:'e1',title:'Pilot review',status:'ready',memory_status:'completed',topic_ids:['t1']}]:[]};
+    else if(path==='/api/memories/projects/p1/memories/m1/history')data=[{before:null,after:memory,reason:'Verified source',created_at:'2026-10-06T06:30:00Z'}];
+    await route.fulfill({json:data});
+  });
+  await page.route('https://example.supabase.co/**',route=>route.fulfill({json:{user,all:[],totp:[],phone:[]}}));
+  await page.goto((process.env.UI_BASE_URL||'http://localhost:8010')+'/');
+  await page.locator('[data-nav="Memories"]').click();
+  await page.getByRole('button',{name:'New project',exact:true}).click();
+  await page.getByLabel('Project name').fill('PNB Edge');
+  await page.getByRole('dialog').getByLabel('Theme',{exact:true}).selectOption('office');
+  await page.getByRole('dialog').getByRole('button',{name:'Save',exact:true}).click();
+  await page.locator('[data-cloud="p1"]').click();
+  await page.getByRole('button',{name:'New topic',exact:true}).click();
+  await page.getByLabel('Topic name').fill('Demo');
+  await page.getByRole('dialog').getByRole('button',{name:'Save',exact:true}).click();
+  await page.locator('[data-cloud="t1"]').click();
+  await page.getByRole('button',{name:'Link a conversation',exact:true}).click();
+  await page.getByRole('dialog').getByLabel('Conversation',{exact:true}).selectOption('e1');
+  await page.getByRole('dialog').getByRole('button',{name:'Save',exact:true}).click();
+  await page.getByRole('button',{name:'Review suggestions',exact:true}).click();
+  await page.getByLabel('Suggested memory').waitFor();
+  await page.getByRole('button',{name:'Accept',exact:true}).click();
+  await page.getByText('No suggestions waiting for review.',{exact:true}).waitFor();
+  await page.locator('[data-cloud="t1"]').click();
+  await page.locator('.memory-fact').getByText('Start with a pilot.',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'Ask about this',exact:true}).click();
+  await page.getByLabel('Question',{exact:true}).fill('Where do we stand?');
+  await page.getByRole('button',{name:'Find an answer',exact:true}).click();
+  await page.locator('#memoryAnswer').getByRole('heading',{name:'Sources'}).waitFor();
+  await page.screenshot({path:'/tmp/memories-live-desktop.png',fullPage:true});
+  for(const width of [390,320]){
+    await page.setViewportSize({width,height:844});
+    await page.getByRole('button',{name:'← Back to map',exact:true}).click();
+    await page.locator('[data-cloud="t1"]').click();
+    await page.locator('.memory-fact').getByText('Start with a pilot.',{exact:true}).waitFor();
+    if(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth))throw Error('Memories mobile overflow');
+    await page.getByRole('button',{name:'Ask about this',exact:true}).click();
+  }
+  await page.screenshot({path:'/tmp/memories-live-mobile.png',fullPage:true});
+  if(errors.length)throw Error(errors.join('\n'));
+  console.log('Live-data Memories UI: project/topic creation, scoped linking, proposal acceptance, cited Ask, and phone layout passed.');
+  await browser.close();
+})().catch(error=>{console.error(error);process.exit(1);});

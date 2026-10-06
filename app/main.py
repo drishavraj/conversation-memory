@@ -81,7 +81,7 @@ def create_app(database_url=None, owner_token=None, answer_provider=None, embedd
 
     @app.get("/api/ui-config")
     def ui_config():
-        return {"configured": browser_auth.configured, "supabase_url": browser_auth.url, "supabase_publishable_key": browser_auth.key, "environment": os.getenv("APP_ENV", "production")}
+        return {"configured": browser_auth.configured, "supabase_url": browser_auth.url, "supabase_publishable_key": browser_auth.key, "environment": os.getenv("APP_ENV", "production"), "memories_enabled": os.getenv("MEMORIES_ENABLED", "false").lower() == "true"}
 
     @app.get("/api/session", dependencies=[Depends(authorize)])
     def browser_session():
@@ -185,6 +185,8 @@ def create_app(database_url=None, owner_token=None, answer_provider=None, embedd
         rows = session.scalars(select(Knowledge).where(Knowledge.entry_id == entry_id)).all()
         return {"english_text":result.english_text if result else None, "summary":result.summary if result else None, "suggested_theme":result.suggested_theme if result else None, "items":[{"id":r.id,"kind":r.kind,"text":r.text,"theme_id":r.theme_id,"certainty":r.certainty,"owner":r.owner,"due_date":r.due_date,"date_basis":r.date_basis,"evidence":r.evidence,"evidence_start":r.evidence_start,"evidence_end":r.evidence_end,"source_entry_id":r.entry_id,"status":r.status,"origin":r.origin,"version":r.version} for r in rows]}
 
+    from .memories import router_for as memories_router
+    app.include_router(memories_router(authorize, db, answer_provider))
     from .ai_settings import router_for as settings_router
     app.include_router(settings_router(authorize, db))
     from .knowledge_api import router_for

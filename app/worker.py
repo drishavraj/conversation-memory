@@ -158,6 +158,8 @@ def run_forever(sessions, provider, stop, poll_seconds=5):
     while not stop.is_set():
         try:
             processed = process_one(sessions, provider)
+            from .memory_worker import process_memory_one
+            processed = process_memory_one(sessions) or processed
             import os
             if os.environ.get("EMBEDDING_MODEL"):
                 from .semantic import index_one, GeminiEmbeddings

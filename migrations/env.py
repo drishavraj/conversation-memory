@@ -2,6 +2,7 @@ import os
 from alembic import context
 from app.database import make_engine
 from app.models import Base
+from app import memory_models  # Register memory tables for metadata inspection.
 if context.is_offline_mode():
     context.configure(url=os.environ["DATABASE_URL"], target_metadata=Base.metadata, literal_binds=True)
     with context.begin_transaction():
