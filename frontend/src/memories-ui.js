@@ -1,8 +1,9 @@
+import { mountChats } from './chat-ui.js';
 import { cloudLayout, createMemoryMap } from './memory-map.js';
 // Real project data; no sample responses or synthetic relationships.
-export function mountMemories(host, {api, esc, theme, openEntry, active}) {
+export function mountMemories(host, {api, esc, theme, openEntry, openChat, onChatChange, active}) {
   let project=null, topic=null, view='map', offset=0, memoryOffset=0, query='', detail=null, timer, request=0;
-  let scope=null, answer=null, paneScreen='overview', openPane=false;
+  let chatCleanup, scope=null, answer=null, paneScreen='overview', openPane=false;
   const mapCache=new Map();
   const names={office:'Office',personal:'Personal','side-projects':'Side Projects'};
   const q=s=>host.querySelector(s);
@@ -16,7 +17,7 @@ export function mountMemories(host, {api, esc, theme, openEntry, active}) {
   q('#memorySearch').oninput=e=>{query=e.target.value;if(project){drawClouds();}else{offset=0;loadProjects();}};
   q('#memoryCreate').onclick=()=>project?createTopic():createProject();
   q('#memoryAsk').onclick=()=>{topic=null;memoryOffset=0;loadProject(false,true);};
-  q('#memoryClose').onclick=()=>{openPane=false;q('#memoryWorkspace').classList.remove('memory-detail-open');q('#memoryRail').hidden=true;q(`[data-cloud="${topic?.id||''}"]`)?.focus();};
+  q('#memoryClose').onclick=()=>{chatCleanup?.();chatCleanup=null;openPane=false;q('#memoryWorkspace').classList.remove('memory-detail-open');q('#memoryRail').hidden=true;q('#memoryWorkspace').classList.remove('memory-chat-expanded');q(`[data-cloud="${topic?.id||''}"]`)?.focus();};
   let projects=[],hasMore=false;
   function animate(back=false){if(matchMedia('(prefers-reduced-motion: reduce)').matches)return;q('#memoryClouds').animate([{transform:`scale(${back?1.08:.85})`,opacity:.4},{transform:'scale(1)',opacity:1}],{duration:360,easing:'cubic-bezier(.2,.75,.25,1)'});}
   function breadcrumbs(){
@@ -52,7 +53,7 @@ export function mountMemories(host, {api, esc, theme, openEntry, active}) {
       if(data.entries.some(e=>['queued','processing'].includes(e.memory_status)&&e.status!=='failed'))timer=setTimeout(()=>{if(active()&&project)loadProject(true);},5000);
     }catch(e){fail(e);}
   }
-  function reveal(label,screen){openPane=true;paneScreen=screen;q('#memoryManagement').hidden=screen!=='sources';q('#memoryContent').hidden=screen==='sources';host.querySelectorAll('[data-pane]').forEach(b=>b.setAttribute('aria-pressed',b.dataset.pane===(screen==='review'||screen==='history'?'overview':screen))); q('#memoryRail').hidden=false;q('#memoryScope').textContent=label;q('#memoryContent').dataset.screen=screen;q('#memoryWorkspace').classList.add('memory-detail-open');}
+  function reveal(label,screen){if(screen!=='ask'){q('#memoryWorkspace').classList.remove('memory-chat-expanded');chatCleanup?.();chatCleanup=null;}openPane=true;paneScreen=screen;q('#memoryManagement').hidden=screen!=='sources';q('#memoryContent').hidden=screen==='sources';host.querySelectorAll('[data-pane]').forEach(b=>b.setAttribute('aria-pressed',b.dataset.pane===(screen==='review'||screen==='history'?'overview':screen))); q('#memoryRail').hidden=false;q('#memoryScope').textContent=label;q('#memoryContent').dataset.screen=screen;q('#memoryWorkspace').classList.add('memory-detail-open');}
   function evidenceRows(evidence){return evidence.map(e=>`<blockquote class="quote">${esc(e.evidence)}<p class="helper">${esc(e.source_title)} · ${e.event_at?esc(new Date(e.event_at).toLocaleString()):'Event time unknown'}</p>${button('Open conversation',`data-source="${esc(e.source_entry_id)}"`)}</blockquote>`).join('');}
   function wireSources(){host.querySelectorAll('[data-source]').forEach(b=>b.onclick=()=>openEntry(b.dataset.source));}
   function showOverview(open=true){
@@ -94,13 +95,13 @@ export function mountMemories(host, {api, esc, theme, openEntry, active}) {
     host.querySelectorAll('[data-proposal]').forEach(card=>{const p=detail.proposals.find(x=>x.id===card.dataset.proposal);for(const decision of ['accept','reject'])card.querySelector('[data-'+decision+']').onclick=e=>work(e.currentTarget,async()=>{await api(`/memories/projects/${project.id}/proposals/${p.id}/review`,{method:'POST',body:JSON.stringify({decision,expected_version:p.current?.version||null,text:decision==='accept'?card.querySelector('[data-text]').value:null,reason:card.querySelector('[data-reason]').value})});await loadProject();showReview();});});wireSources();
   }
   function showAsk(){
-    scope={project_id:project.id,project_name:project.name,topic_id:topic?.id||null,topic_name:topic?.name||null};answer=null;renderAsk();
-  }
-  function renderAsk(){
-    reveal(scope.topic_name||scope.project_name,'ask');q('#memoryContent').innerHTML=`<h2>Ask your memories</h2><p class="helper">Scope: ${esc(scope.project_name)}${scope.topic_name?' / '+esc(scope.topic_name):''}. Answers use accepted memories.</p><form id="memoryQuestion"><label>Question<textarea name="question" required maxlength="1000" placeholder="Where do we stand?"></textarea></label><label><input name="history" type="checkbox"> Include memory history</label><button class="primary sectiongap">Find an answer</button></form><div id="memoryAnswer" aria-live="polite"></div>`;
-    q('#memoryQuestion').onsubmit=e=>{e.preventDefault();const form=new FormData(e.target),savedScope=scope;work(e.submitter,async()=>{q('#memoryAnswer').textContent='Looking through your accepted memories…';const result=await api(`/memories/projects/${savedScope.project_id}/ask`,{method:'POST',body:JSON.stringify({question:form.get('question'),topic_id:savedScope.topic_id,include_history:form.has('history')})});if(!active()||q('#memoryContent').dataset.screen!=='ask'||scope!==savedScope)return;answer=result;q('#memoryAnswer').innerHTML=result.status==='no_evidence'?'<p class="notice">No accepted memories support an answer yet. Link conversations and review suggestions first.</p>':`${result.pending_changes?'<p class="notice">This project has changes awaiting review. The answer reflects accepted memories.</p>':''}${result.claims.map(c=>`<p>${esc(c.text)}</p>`).join('')}<h3>Sources</h3>${result.sources.map(s=>`<details><summary>${esc(s.text)}</summary>${evidenceRows(s.evidence)}</details>`).join('')}`;wireSources();});};
+    chatCleanup?.();
+    scope={project_id:project.id,project_name:project.name,topic_id:topic?.id||null,topic_name:topic?.name||null};
+    const savedScope=scope;
+    reveal(topic?.name||project.name,'ask');q('#memoryContent').replaceChildren();
+    chatCleanup=mountChats(q('#memoryContent'),{api,esc,scope,active:()=>active()&&scope===savedScope&&paneScreen==='ask'&&openPane,onChange:onChatChange,onExpand:()=>q('#memoryWorkspace').classList.toggle('memory-chat-expanded')});
   }
   loadProjects();
-  return ()=>{clearTimeout(timer);request++;map.dispose();captureCleanup();};
+  return ()=>{clearTimeout(timer);request++;map.dispose();chatCleanup?.();captureCleanup();};
   function captureCleanup(){document.querySelectorAll('dialog[data-memory-dialog]').forEach(d=>d.close());}
 }

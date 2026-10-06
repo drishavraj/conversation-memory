@@ -13,6 +13,7 @@ for (const file of [
   "style.css",
   "design-system.css",
   "memory-map.css",
+  "chat-ui.css",
   "manifest.webmanifest",
   "icon.svg",
   "icon-180.png",

@@ -1,3 +1,5 @@
+import { mountChats, clearChatState } from './chat-ui.js';
+let selectedChat=null, chatCleanup;
 import morphdom from "morphdom";
 import { mountMemories } from "./memories-ui.js";
 let memoryCleanup;
@@ -48,6 +50,7 @@ const names = {
 const icon = (path) =>
   `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="${path}" /></svg>`;
 const icons = {
+  Chats: icon("M5 4h14v12H9l-4 4V4Z"),
   Memories: icon("M12 3a9 9 0 1 0 9 9M12 3v9h9"),
   Settings: icon("M4 7h16M4 17h16M9 4v6M15 14v6"),
   Capture: icon("M12 5v14M5 12h14"),
@@ -126,7 +129,7 @@ async function api(path, options = {}) {
   };
   if (options.body && !(options.body instanceof FormData))
     headers["Content-Type"] = "application/json";
-  const { onUploadProgress, ...requestOptions } = options;
+  const { onUploadProgress, raw, ...requestOptions } = options;
   const response = onUploadProgress ? await new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open(requestOptions.method || 'POST', '/api' + path);
@@ -137,6 +140,7 @@ async function api(path, options = {}) {
     xhr.onabort = () => reject(new Error('Upload cancelled. Please try again.'));
     xhr.send(requestOptions.body);
   }) : await fetch("/api" + path, { ...requestOptions, headers });
+  if(raw&&response.ok)return response;
   let body;
   try {
     body = await response.json();
@@ -186,12 +190,13 @@ async function safe(button, work) {
   }
 }
 async function showAuth() {
-  memoryCleanup?.();memoryCleanup=null;
+  memoryCleanup?.();memoryCleanup=null;chatCleanup?.();chatCleanup=null;
   stopRecording(); clearAudio();
   clearTimeout(refreshTimer);
   requestVersion++;
   const { data } = await auth.auth.getSession();
   session = data.session;
+  if(!session){clearChatState();selectedChat=null;}
   qr = null;
   secret = null;
   factor = null;
@@ -318,18 +323,22 @@ function wireVerify() {
 async function logout() {
   if (!leaveCapture()) return;
   await auth.auth.signOut();
+  clearChatState();selectedChat=null;
   await showAuth();
 }
-const navNames = {Capture:'Record', Actions:'To-dos', Memories:'Memories', Library:'Conversations'};
-const screenTitles = {Capture:'Record a conversation',Actions:'To-dos',Library:'Conversations',Ask:'Ask your memory',Settings:'Settings',Memories:'Memories'};
+const navNames = {Capture:'Record', Actions:'To-dos', Memories:'Memories', Chats:'Chats', Library:'Conversations'};
+const screenTitles = {Capture:'Record a conversation',Actions:'To-dos',Library:'Conversations',Ask:'Ask your memory',Settings:'Settings',Memories:'Memories',Chats:'Chats'};
 function closeAccount() { const menu=document.querySelector('#accountMenu'); if(menu)menu.hidden=true; document.querySelector('#accountToggle')?.setAttribute('aria-expanded','false'); }
 root.addEventListener('click',e=>{if(!e.target.closest('.account-dock'))closeAccount();});
 root.addEventListener('keydown',e=>{if(e.key==='Escape'&&!document.querySelector('#accountMenu')?.hidden){closeAccount();document.querySelector('#accountToggle')?.focus();}});
-function updateShellHeader() { document.querySelector('#pageTitle').textContent=screenTitles[screen]||'Memory'; document.querySelector('.main').dataset.screen=screen; document.querySelector('#theme').hidden=screen==='Settings'; root.querySelectorAll('[data-nav]').forEach(b=>{if(b.dataset.nav===(screen==='Ask'?'Library':screen))b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');}); }
+function updateShellHeader() { document.querySelector('#pageTitle').textContent=screenTitles[screen]||'Memory'; document.querySelector('.main').dataset.screen=screen; document.querySelector('#theme').hidden=['Settings','Chats'].includes(screen); root.querySelectorAll('[data-nav]').forEach(b=>{if(b.dataset.nav===(screen==='Ask'?'Library':screen))b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');}); }
 function navigate(next) {
   if (!leaveCapture()) return;
+  if(next==='Chats')selectedChat=null;
   screen = next; render();
 }
+function openChat(id){if(!leaveCapture())return;selectedChat=id;screen='Chats';render();}
+async function refreshRecent(){if(!config?.memories_enabled||!document.querySelector('#recentChats'))return;try{const d=await api('/memories/chats?limit=4');const el=document.querySelector('#recentChats');if(!el)return;el.innerHTML=d.items.map(t=>`<button data-recent-chat="${esc(t.id)}" title="${esc(t.title)}">${esc(t.title)}</button>`).join('')||'<span class="helper">No saved chats yet</span>';el.querySelectorAll('button').forEach(b=>b.onclick=()=>openChat(b.dataset.recentChat));}catch{/* Main Chats screen provides errors and retry. */}}
 function shell() {
   const email=session.user.email||'';
   const metadata=session.user.user_metadata||{};
@@ -337,7 +346,7 @@ function shell() {
   const initials=displayName.trim().split(/\s+/).slice(0,2).map(x=>x[0]||'').join('').toUpperCase();
   const environment=config.environment&&config.environment!=='production'?`<span class="env-badge" aria-label="${esc(config.environment)} environment">${esc(config.environment==='development'?'DEV':config.environment.toUpperCase())}</span>`:'';
   let collapsed=false;try{collapsed=localStorage.getItem('memory-sidebar-collapsed')==='true';}catch{}
-  root.innerHTML = `<div class="shell ${collapsed?'sidebar-collapsed':''}"><aside class="sidebar"><div class="brand-row"><div class="brand"><span class="brand-word">Memory</span>${environment}</div>${btn('‹','sidebar-toggle','id="sidebarToggle" aria-label="Toggle sidebar" aria-expanded="'+!collapsed+'"')}</div><nav class="nav" aria-label="Main navigation">${Object.entries(navNames).filter(([id])=>id!=='Memories'||config.memories_enabled).map(([id,label])=>btn(`${icons[id]}<span>${label}</span>`,'',`data-nav="${id}" aria-label="${label}" title="${label}"`)).join('')}</nav><footer class="account-dock"><div id="accountMenu" class="account-menu" hidden><div class="account-menu-identity"><strong>${esc(displayName)}</strong><span>${esc(email)}</span></div>${btn('Settings','','id="settingsNav"') }<label for="accountAppearance">Appearance</label><select id="accountAppearance">${['system','light','dark'].map(x=>`<option value="${x}" ${appearance===x?'selected':''}>${x[0].toUpperCase()+x.slice(1)}</option>`).join('')}</select>${btn('Sign out','','id="accountLogout"')}</div><button id="accountToggle" class="account-toggle" aria-expanded="false" aria-controls="accountMenu" aria-label="Open account menu"><span class="account-avatar">${esc(initials)}</span><span class="account-identity"><span>${esc(displayName)}</span><small>${esc(email)}</small></span><span class="account-chevron" aria-hidden="true">⌃</span></button></footer></aside><main class="main"><header class="topbar"><div class="page-heading"><h1 id="pageTitle"></h1><span class="mobile-environment">${environment}</span></div><select id="theme" aria-label="Current theme"><option value="">All themes</option>${Object.entries(names).map(([id,n])=>`<option value="${id}" ${theme===id?'selected':''}>${n}</option>`).join('')}</select></header><div id="content"></div></main></div>`;
+  root.innerHTML = `<div class="shell ${collapsed?'sidebar-collapsed':''}"><aside class="sidebar"><div class="brand-row"><div class="brand"><span class="brand-word">Memory</span>${environment}</div>${btn('‹','sidebar-toggle','id="sidebarToggle" aria-label="Toggle sidebar" aria-expanded="'+!collapsed+'"')}</div><nav class="nav" aria-label="Main navigation">${Object.entries(navNames).filter(([id])=>!['Memories','Chats'].includes(id)||config.memories_enabled).map(([id,label])=>btn(`${icons[id]}<span>${label}</span>`,'',`data-nav="${id}" aria-label="${label}" title="${label}"`)).join('')}</nav>${config.memories_enabled?'<details class="recent-chats" open><summary>Recent chats</summary><div id="recentChats"></div></details>':''}<footer class="account-dock"><div id="accountMenu" class="account-menu" hidden><div class="account-menu-identity"><strong>${esc(displayName)}</strong><span>${esc(email)}</span></div>${btn('Settings','','id="settingsNav"') }<label for="accountAppearance">Appearance</label><select id="accountAppearance">${['system','light','dark'].map(x=>`<option value="${x}" ${appearance===x?'selected':''}>${x[0].toUpperCase()+x.slice(1)}</option>`).join('')}</select>${btn('Sign out','','id="accountLogout"')}</div><button id="accountToggle" class="account-toggle" aria-expanded="false" aria-controls="accountMenu" aria-label="Open account menu"><span class="account-avatar">${esc(initials)}</span><span class="account-identity"><span>${esc(displayName)}</span><small>${esc(email)}</small></span><span class="account-chevron" aria-hidden="true">⌃</span></button></footer></aside><main class="main"><header class="topbar"><div class="page-heading"><h1 id="pageTitle"></h1><span class="mobile-environment">${environment}</span></div><select id="theme" aria-label="Current theme"><option value="">All themes</option>${Object.entries(names).map(([id,n])=>`<option value="${id}" ${theme===id?'selected':''}>${n}</option>`).join('')}</select></header><div id="content"></div></main></div>`;
   document.querySelector('#settingsNav').onclick = () => {closeAccount();navigate('Settings');};
   document.querySelector('#accountToggle').onclick=()=>{const menu=document.querySelector('#accountMenu');menu.hidden=!menu.hidden;document.querySelector('#accountToggle').setAttribute('aria-expanded',!menu.hidden);};
   document.querySelector('#accountLogout').onclick=e=>safe(e.currentTarget,logout);
@@ -348,10 +357,10 @@ function shell() {
     theme = e.target.value; render();
   };
   root.querySelectorAll('[data-nav]').forEach(b=>b.onclick=()=>navigate(b.dataset.nav));
-  render();
+  render();refreshRecent();
 }
 function render() {
-  memoryCleanup?.();memoryCleanup=null;
+  memoryCleanup?.();memoryCleanup=null;chatCleanup?.();chatCleanup=null;
   clearTimeout(refreshTimer);
   const version = ++requestVersion;
   root
@@ -364,7 +373,8 @@ function render() {
   document.querySelector('#quickRecord')?.addEventListener('click',()=>navigate('Capture'));
   root.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>navigate(b.dataset.view));
   ({
-    Memories: () => { memoryCleanup=mountMemories(document.querySelector('#panel'),{api,esc,theme,openEntry,active:()=>version===requestVersion}); },
+    Chats: () => {chatCleanup=mountChats(document.querySelector('#panel'),{api,esc,threadId:selectedChat,active:()=>version===requestVersion,onChange:refreshRecent});},
+    Memories: () => { memoryCleanup=mountMemories(document.querySelector('#panel'),{api,esc,theme,openEntry,openChat,onChatChange:refreshRecent,active:()=>version===requestVersion}); },
     Capture: capture,
     Ask: ask,
     Library: () => library(version),
@@ -662,7 +672,7 @@ async function library(version, offset = 0) {
   }
 }
 async function openEntry(id) {
-  memoryCleanup?.();memoryCleanup=null;
+  memoryCleanup?.();memoryCleanup=null;chatCleanup?.();chatCleanup=null;
   clearTimeout(refreshTimer);
   screen = "Library";
   updateShellHeader();

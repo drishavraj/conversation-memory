@@ -164,4 +164,30 @@ def router_for(authorize,db,answer_provider=None):
         if turn.status=='running' and now()-stamp<timedelta(minutes=15):raise HTTPException(409,'Response still processing; retry after its lease expires')
         turn.status='running';turn.error=None;turn.lease=str(uuid4());turn.updated_at=now();t.pending_turn_id=turn.id;session.commit()
         return run(session,t,turn)
+    @router.post('/{thread_id}/turns/stream')
+    def stream(thread_id:str,payload:TurnInput,session=Depends(db)):
+        # Only progress and the fully validated final answer are streamed. Never expose
+        # unvalidated provider tokens before citation/source checks have completed.
+        import asyncio
+        import json
+        from fastapi.responses import StreamingResponse
+        from sqlalchemy.orm import Session
+        engine=session.get_bind()
+        def execute():
+            with Session(engine) as isolated:
+                return send(thread_id,payload,isolated)
+        async def events():
+            future=asyncio.get_running_loop().run_in_executor(None,execute)
+            yield 'event: status\ndata: '+json.dumps({'message':'Retrieving evidence and preparing your answer…'})+'\n\n'
+            try:
+                while not future.done():
+                    done,_=await asyncio.wait({future},timeout=5)
+                    if not done:yield ': keepalive\n\n'
+                result=await future
+                yield 'event: result\ndata: '+json.dumps(result)+'\n\n'
+            except HTTPException as exc:
+                yield 'event: error\ndata: '+json.dumps({'message':str(exc.detail),'status':exc.status_code})+'\n\n'
+            except Exception:
+                yield 'event: error\ndata: '+json.dumps({'message':'Connection interrupted. Check the saved chat before retrying.'})+'\n\n'
+        return StreamingResponse(events(),media_type='text/event-stream',headers={'Cache-Control':'no-cache','X-Accel-Buffering':'no'})
     return router

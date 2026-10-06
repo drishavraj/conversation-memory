@@ -146,3 +146,18 @@ def test_obsolete_execution_cannot_overwrite_new_lease(client,headers,answers):
     answers.callback=supersede
     result=send(client,headers,t['id']).json()['turn']
     assert result['error']=='newer_execution';assert result['response'] is None
+
+def test_stream_returns_progress_and_validated_saved_turn(client,headers,answers):
+    import json
+    p,topic,k=setup(client,headers);t=thread(client,headers,p,topic)
+    r=client.post(f'/api/memories/chats/{t["id"]}/turns/stream',headers=headers,json={'question':'What was agreed?','request_id':str(uuid4()),'expected_version':0})
+    assert r.status_code==200;assert 'text/event-stream' in r.headers['content-type']
+    assert 'event: status' in r.text;assert 'event: result' in r.text
+    result=json.loads(r.text.split('event: result\ndata: ')[1].strip())
+    assert result['turn']['status']=='completed';assert result['turn']['response']['sources']
+    assert len(client.get('/api/memories/chats/'+t['id'],headers=headers).json()['turns'])==1
+
+def test_stream_rejects_stale_version_without_provider_call(client,headers,answers):
+    p,topic,k=setup(client,headers);t=thread(client,headers,p,topic)
+    r=client.post(f'/api/memories/chats/{t["id"]}/turns/stream',headers=headers,json={'question':'Question','request_id':str(uuid4()),'expected_version':99})
+    assert 'event: error' in r.text;assert '409' in r.text;assert answers.calls==[]

@@ -73,13 +73,23 @@ const fs = require("fs");
     ],
     embedding:{model:'configured-embedding'}
   };
-  let projects=[], topics=[], accepted=false, linked=false;
+  let projects=[], topics=[], accepted=false, linked=false, threads=[], failNext=false;
   const evidence={id:'k1',version:1,evidence:'We will start with a pilot.',source_entry_id:'e1',source_title:'Pilot review',event_at:'2026-10-06T06:30:00Z'};
   const memory={id:'m1',text:'Start with a pilot.',kind:'decision',certainty:'explicit',version:1,topic_ids:['t1'],evidence:[evidence],needs_review:false};
   const proposal={id:'r1',text:memory.text,kind:'decision',certainty:'explicit',operation:'new',reason:'Explicit decision',evidence:[evidence],current:null,stale:false};
   await page.route('**/api/**',async route=>{
     const path=new URL(route.request().url()).pathname,method=route.request().method();let data={};
-    if(path==='/api/ui-config')data={environment:'development',configured:true,memories_enabled:true,supabase_url:'https://example.supabase.co',supabase_publishable_key:'sb_publishable_test'};
+    if(path==='/api/memories/chats'){
+      if(method==='POST'){const payload=route.request().postDataJSON();data={id:'chat-'+(threads.length+1),...payload,project_name:'PNB Edge',topic_name:payload.topic_id?'Demo':null,title:'New chat',version:0,turns:[],has_older:false,pending_turn_id:null,updated_at:new Date().toISOString()};threads.push(data);}else data={items:threads.filter(t=>!new URL(route.request().url()).searchParams.get('topic_id')||t.topic_id===new URL(route.request().url()).searchParams.get('topic_id')),has_more:false};
+    }else if(path.startsWith('/api/memories/chats/')){
+      const id=path.split('/')[4],t=threads.find(t=>t.id===id);
+      if(path.endsWith('/turns/stream')){
+        const payload=route.request().postDataJSON();
+        if(payload.expected_version!==t.version)throw Error('Wrong chat version');
+        const turn={id:'turn-'+(t.turns.length+1),request_id:payload.request_id,question:payload.question,sequence:++t.version,status:failNext?'failed':'completed',response:failNext?null:{status:'answered',claims:[{text:memory.text,source_ids:['m1']}],sources:[memory]},changed_source_ids:[],context_info:{},error:failNext?'answer_generation_unavailable':null};failNext=false;t.turns.push(turn);t.title=payload.question;
+        return route.fulfill({contentType:'text/event-stream',body:'event: status\ndata: '+JSON.stringify({message:'Checking evidence…'})+'\n\nevent: result\ndata: '+JSON.stringify({thread_version:t.version,turn})+'\n\n'});
+      }else if(path.endsWith('/retry')){const turn=t.turns.at(-1);turn.status='completed';turn.error=null;turn.response={status:'answered',claims:[{text:memory.text,source_ids:['m1']}],sources:[memory]};data={turn,thread_version:t.version};}else data=t;
+    }else if(path==='/api/ui-config')data={environment:'development',configured:true,memories_enabled:true,supabase_url:'https://example.supabase.co',supabase_publishable_key:'sb_publishable_test'};
     else if(path==='/api/session')data={status:'authenticated'};
     else if(path==='/api/actions')data=[];
     else if(path==='/api/ai-settings')data=aiSettings;
@@ -136,9 +146,39 @@ const fs = require("fs");
   await page.locator('[data-cloud="t1"]').click();
   await page.locator('.memory-fact').getByText('Start with a pilot.',{exact:true}).waitFor();
   await page.getByRole('button',{name:'Ask about this',exact:true}).click();
-  await page.getByLabel('Question',{exact:true}).fill('Where do we stand?');
-  await page.getByRole('button',{name:'Find an answer',exact:true}).click();
-  await page.locator('#memoryAnswer').getByRole('heading',{name:'Sources'}).waitFor();
+  await page.getByRole('button',{name:'New chat',exact:true}).click();
+  await page.getByLabel('Message',{exact:true}).fill('Where do we stand?');
+  await page.getByRole('button',{name:'Send',exact:true}).click();
+  await page.locator('.chat-answer').getByText('Start with a pilot.',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'Source 1',exact:true}).click();
+  await page.getByRole('dialog').getByText('We will start with a pilot.',{exact:false}).waitFor();
+  await page.getByRole('button',{name:'Back to chat',exact:true}).click();
+  await page.getByRole('button',{name:'Expand chat',exact:true}).click();
+  await page.getByRole('button',{name:'Return to pane',exact:true}).click();
+  await page.getByLabel('Message',{exact:true}).fill('What next?');
+  await page.getByRole('button',{name:'Send',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelectorAll('.chat-turn').length===2);
+  await page.getByRole('button',{name:'New chat',exact:true}).click();
+  await page.getByLabel('Message',{exact:true}).waitFor();
+  await page.waitForFunction(()=>document.querySelectorAll('.chat-turn').length===0&&document.querySelector('[data-composer]'));
+  if(await page.locator('.chat-turn').count())throw Error('New thread contains old messages');
+  await page.getByLabel('Message',{exact:true}).fill('Keep this draft');
+  await page.locator('[data-nav="Chats"]').click();
+  await page.locator('[data-thread="chat-2"]').click();
+  if(await page.getByLabel('Message',{exact:true}).inputValue()!=='Keep this draft')throw Error('Draft lost on navigation');
+  failNext=true;
+  await page.getByRole('button',{name:'Send',exact:true}).click();
+  await page.getByRole('button',{name:'Retry response',exact:true}).click();
+  await page.locator('.chat-answer').getByText('Start with a pilot.',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'History',exact:true}).click();
+  await page.locator('[data-thread="chat-1"]').click();
+  await page.waitForFunction(()=>document.querySelectorAll('.chat-turn').length===2);
+  if(await page.locator('.chat-turn').count()!==2)throw Error('Saved history lost messages');
+  await page.locator('[data-nav="Memories"]').click();
+  await page.locator('[data-cloud="p1"]').click();
+  await page.locator('[data-cloud="t1"]').click();
+  await page.locator('[data-pane="ask"]').click();
+  await page.locator('[data-thread="chat-1"]').click();
   await page.screenshot({path:'/tmp/memories-live-desktop.png',fullPage:true});
   for(const width of [390,320]){
     await page.setViewportSize({width,height:844});
