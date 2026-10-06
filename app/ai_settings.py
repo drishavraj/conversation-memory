@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
-from .models import AISettings
+from .models import WorkspaceAISettings as AISettings
 
 TASKS = ('transcription', 'translation', 'summary', 'extraction', 'answer', 'reconciliation')
 FILE_TASKS = ('transcription', 'translation', 'summary', 'extraction')
@@ -52,7 +52,7 @@ def catalog():
 def defaults_for(session):
     defaults={task:{'provider':'gemini','model':os.getenv(f'{task.upper()}_MODEL') or (os.getenv('GENERATION_MODEL') or 'gemini-3.8-flash')} for task in TASKS}
     for task in TASKS:defaults[task]['provider']=(os.getenv(f'{task.upper()}_PROVIDER') or 'gemini')
-    row=session.get(AISettings,'defaults')
+    row=session.get(AISettings,session.access.workspace_id)
     if row:defaults.update(row.defaults)
     return defaults, row.version if row else 0
 
@@ -95,10 +95,10 @@ def router_for(authorize,db):
         validate_choices(values)
         try:
             if payload.expected_version==0:
-                session.add(AISettings(id='defaults',defaults=values,version=1))
+                session.add(AISettings(workspace_id=session.access.workspace_id,defaults=values,version=1))
                 session.flush()
             else:
-                changed=session.execute(update(AISettings).where(AISettings.id=='defaults',AISettings.version==payload.expected_version).values(defaults=values,version=payload.expected_version+1))
+                changed=session.execute(update(AISettings).where(AISettings.workspace_id==session.access.workspace_id,AISettings.version==payload.expected_version).values(defaults=values,version=payload.expected_version+1))
                 if changed.rowcount!=1:raise HTTPException(409,'Settings changed; reload before saving')
             session.commit()
         except IntegrityError:

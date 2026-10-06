@@ -11,21 +11,21 @@ from test_api import client, TOKEN
 def auth(monkeypatch):
     monkeypatch.setenv('SUPABASE_URL','https://example.supabase.co')
     monkeypatch.setenv('SUPABASE_PUBLISHABLE_KEY','sb_publishable_test')
-    monkeypatch.setenv('AUTH_OWNER_USER_ID','owner-id')
+    monkeypatch.setenv('AUTH_OWNER_USER_ID','11111111-1111-4111-8111-111111111111')
     verifier=BrowserAuth()
     key=ec.generate_private_key(ec.SECP256R1())
     verifier.client=SimpleNamespace(get_signing_key_from_jwt=lambda token:SimpleNamespace(key=key.public_key()))
     return verifier,key
 
 def make_token(key, **updates):
-    claims={'iss':'https://example.supabase.co/auth/v1','aud':'authenticated','iat':int(time.time()),'exp':int(time.time())+300,'sub':'owner-id','aal':'aal2','role':'authenticated'}
+    claims={'iss':'https://example.supabase.co/auth/v1','aud':'authenticated','iat':int(time.time()),'exp':int(time.time())+300,'sub':'11111111-1111-4111-8111-111111111111','aal':'aal2','role':'authenticated'}
     claims.update(updates)
     return jwt.encode(claims,key,algorithm='ES256')
 
 def test_mfa_owner_signature_and_expiry(auth):
     verifier,key=auth
-    assert verifier.verify(make_token(key))['sub']=='owner-id'
-    for update,code in [({'aal':'aal1'},403),({'sub':'someone-else'},403),({'role':'service_role'},403),({'exp':int(time.time())-30},401),({'iss':'https://evil.example/auth/v1'},401),({'aud':'other'},401)]:
+    assert verifier.verify(make_token(key))['sub']=='11111111-1111-4111-8111-111111111111'
+    for update,code in [({'aal':'aal1'},403),({'role':'service_role'},403),({'exp':int(time.time())-30},401),({'iss':'https://evil.example/auth/v1'},401),({'aud':'other'},401)]:
         with pytest.raises(HTTPException) as exc:verifier.verify(make_token(key,**update))
         assert exc.value.status_code==code
     with pytest.raises(HTTPException) as exc:verifier.verify(make_token(ec.generate_private_key(ec.SECP256R1())))
@@ -55,6 +55,7 @@ def test_disabling_legacy_token(client,monkeypatch):
 def test_api_enforces_mfa_and_single_owner(client,auth,monkeypatch):
     verifier,key=auth
     monkeypatch.setattr('app.main.BrowserAuth',lambda:verifier)
+    monkeypatch.setenv('ALLOW_OWNER_API_TOKEN','false')
     from app.main import create_app
     from fastapi.testclient import TestClient
     with TestClient(create_app(str(client.app.state.engine.url),TOKEN)) as browser:

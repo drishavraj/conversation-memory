@@ -171,10 +171,11 @@ def router_for(authorize,db,answer_provider=None):
         import asyncio
         import json
         from fastapi.responses import StreamingResponse
-        from sqlalchemy.orm import Session
+        from .tenancy import workspace_sessions
         engine=session.get_bind()
+        isolated_sessions=workspace_sessions(engine,session.access.workspace_id,session.access.user_id)
         def execute():
-            with Session(engine) as isolated:
+            with isolated_sessions() as isolated:
                 return send(thread_id,payload,isolated)
         async def events():
             future=asyncio.get_running_loop().run_in_executor(None,execute)

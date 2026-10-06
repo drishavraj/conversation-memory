@@ -9,6 +9,10 @@ from .memories import enabled, Suggestions, RECONCILE_PROMPT, evidence_for, memo
 from .task_providers import provider_for
 
 def process_memory_one(sessions,provider=None):
+    from .tenancy import across_workspaces
+    return across_workspaces(_process_memory_one,sessions,provider)
+
+def _process_memory_one(sessions,provider=None):
     if not enabled():return False
     with sessions() as db:
         # Expired claims are safe to retry: proposals publish in one guarded transaction.

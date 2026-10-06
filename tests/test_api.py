@@ -3,7 +3,7 @@ from alembic.config import Config
 from alembic import command
 from fastapi.testclient import TestClient
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from tenant_fixtures import Session
 from app.main import create_app
 from app.models import Job
 
@@ -12,6 +12,8 @@ TOKEN = 'test-owner-token-that-is-long-enough'
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.delenv('REDIS_URL', raising=False)
+    monkeypatch.setenv('AUTH_OWNER_USER_ID','11111111-1111-4111-8111-111111111111')
+    monkeypatch.setenv('ALLOW_OWNER_API_TOKEN','true')
     monkeypatch.setenv('GEMINI_API_KEY','test-secret')
     monkeypatch.setenv('GENERATION_MODEL','test-model')
     url = f'sqlite:///{tmp_path}/test.db'

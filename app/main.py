@@ -17,7 +17,7 @@ from fastapi.encoders import jsonable_encoder
 from .fingerprint import fingerprint
 from .ai_settings import ProcessingOptions, snapshot
 from redis import Redis
-from .database import make_engine, session_factory
+from .database import make_engine
 from .models import Entry, Job, Theme, ProcessedEntry, Knowledge
 
 class TextInput(BaseModel):
@@ -46,7 +46,6 @@ def create_app(database_url=None, owner_token=None, answer_provider=None, embedd
     if len(token) < 32:
         raise RuntimeError("Set OWNER_API_TOKEN to at least 32 characters")
     engine = make_engine(database_url)
-    sessions = session_factory(engine)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -75,9 +74,22 @@ def create_app(database_url=None, owner_token=None, answer_provider=None, embedd
     def authorize(credentials: HTTPAuthorizationCredentials | None = Depends(security)):
         if credentials is None:
             raise HTTPException(401, "Authentication required", headers={"WWW-Authenticate": "Bearer"})
+        from .tenancy import Access
+        from .models import Workspace, WorkspaceMembership, LEGACY_WORKSPACE_ID
         if legacy_enabled and secrets.compare_digest(credentials.credentials, token):
-            return
-        return browser_auth.verify(credentials.credentials)
+            # Explicit compatibility token has one fixed workspace, never global access.
+            with engine.connect() as conn:
+                active=conn.execute(select(Workspace.id).where(Workspace.id==LEGACY_WORKSPACE_ID,Workspace.status=='active')).scalar_one_or_none()
+            if not active:raise HTTPException(403, "Workspace not active")
+            return Access(LEGACY_WORKSPACE_ID)
+        claims=browser_auth.verify(credentials.credentials)
+        if claims['sub'] != browser_auth.owner:
+            from .tenancy import runtime_isolation_ready
+            if not runtime_isolation_ready(engine):raise HTTPException(503, 'Tenant database role configuration required')
+        with engine.connect() as conn:
+            ids=list(conn.scalars(select(WorkspaceMembership.workspace_id).join(Workspace,Workspace.id==WorkspaceMembership.workspace_id).where(WorkspaceMembership.user_id==claims['sub'],WorkspaceMembership.status=='active',Workspace.status=='active')))
+        if len(ids)!=1:raise HTTPException(403, "No unique active workspace membership")
+        return Access(ids[0],claims['sub'])
 
     @app.get("/api/ui-config")
     def ui_config():
@@ -95,8 +107,9 @@ def create_app(database_url=None, owner_token=None, answer_provider=None, embedd
         def home():
             return FileResponse(static_dir / "index.html", headers={"Cache-Control":"no-store"})
 
-    def db():
-        with sessions() as session:
+    def db(access=Depends(authorize)):
+        from .tenancy import workspace_sessions
+        with workspace_sessions(engine,access.workspace_id,access.user_id)() as session:
             yield session
 
     def entry_dict(entry):

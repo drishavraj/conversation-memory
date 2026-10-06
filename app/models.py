@@ -1,6 +1,6 @@
 from datetime import datetime, timezone, date
 from uuid import uuid4
-from sqlalchemy import String, Text, DateTime, ForeignKey, Date, LargeBinary, JSON
+from sqlalchemy import String, Text, DateTime, ForeignKey, Date, LargeBinary, JSON, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 def now():
@@ -12,10 +12,7 @@ class Base(DeclarativeBase):
 LEGACY_WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
 
 class WorkspaceOwned:
-    # Temporary single-owner bridge. Phase 2 removes this default once all writers
-    # supply authenticated workspace context; it is not an authorization mechanism.
-    workspace_id: Mapped[str] = mapped_column(String(36), ForeignKey("workspaces.id"), nullable=False,
-        default=LEGACY_WORKSPACE_ID, server_default=LEGACY_WORKSPACE_ID, index=True)
+    workspace_id: Mapped[str] = mapped_column(String(36), ForeignKey("workspaces.id"), nullable=False, index=True)
 
 class Workspace(Base):
     __tablename__ = "workspaces"
@@ -44,6 +41,7 @@ class Theme(Base):
     name: Mapped[str] = mapped_column(String(64), unique=True)
 
 class Entry(WorkspaceOwned, Base):
+    __table_args__ = (UniqueConstraint("workspace_id", "fingerprint"),)
     __tablename__ = "entries"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     title: Mapped[str] = mapped_column(String(200))
@@ -54,7 +52,7 @@ class Entry(WorkspaceOwned, Base):
     processing_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     processing_outputs: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     original_text: Mapped[str] = mapped_column(Text)
-    fingerprint: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
+    fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
     theme_id: Mapped[str | None] = mapped_column(ForeignKey("themes.id"), nullable=True)
     event_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

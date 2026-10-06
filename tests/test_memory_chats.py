@@ -1,7 +1,7 @@
 from uuid import uuid4
 from datetime import timedelta
 import pytest
-from sqlalchemy.orm import Session
+from tenant_fixtures import Session
 from sqlalchemy import select
 from app.models import Knowledge, now
 from app.memory_models import ChatTurn, ChatThread

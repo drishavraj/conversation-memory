@@ -36,6 +36,10 @@ def chunks(text,size=1800,overlap=200):
         if end==len(text):break
 
 def index_one(sessions,provider):
+    from .tenancy import across_workspaces
+    return across_workspaces(_index_one,sessions,provider)
+
+def _index_one(sessions,provider):
     # One resumable vector per invocation, avoiding retranscription or unbounded worker jobs.
     with sessions() as db:
         entry=db.scalar(select(Entry).where(Entry.status=='ready',Entry.index_status=='pending').order_by(Entry.uploaded_at,Entry.id).limit(1))

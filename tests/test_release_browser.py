@@ -12,7 +12,7 @@ import time
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy.orm import Session
+from tenant_fixtures import Session
 import uvicorn
 from app.main import create_app
 from app.models import Entry, Knowledge

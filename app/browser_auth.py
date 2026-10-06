@@ -18,7 +18,7 @@ class BrowserAuth:
             except jwt.PyJWTError:
                 raise RuntimeError('Invalid Supabase public key')
         self.owner = os.environ.get('AUTH_OWNER_USER_ID', '')
-        self.configured = bool(self.url and self.key and self.owner)
+        self.configured = bool(self.url and self.key)
         self.client = None
         if self.configured:
             parsed = urlparse(self.url)
@@ -38,7 +38,7 @@ class BrowserAuth:
             raise HTTPException(503, 'Login verification temporarily unavailable')
         except (jwt.PyJWTError, ValueError):
             raise HTTPException(401, 'Session invalid or expired')
-        if claims.get('sub') != self.owner or claims.get('role') != 'authenticated':
+        if not claims.get('sub') or claims.get('role') != 'authenticated':
             raise HTTPException(403, 'This account does not have access')
         if claims.get('aal') != 'aal2':
             raise HTTPException(403, 'Authenticator verification required')

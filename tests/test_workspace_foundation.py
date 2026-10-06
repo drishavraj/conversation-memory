@@ -30,7 +30,7 @@ def migrated(request,tmp_path,monkeypatch):
         db.execute(sa.text("INSERT INTO ai_settings (id,defaults,version) VALUES ('defaults','{}',2)"))
     # Preserve coverage of the older chat migration's reversible round trip.
     command.downgrade(cfg,'0007');command.upgrade(cfg,'0008')
-    command.upgrade(cfg,'head')
+    command.upgrade(cfg,'0009')
     yield engine
     # Intentionally retain the disposable PostgreSQL DB for inspection; never drop it.
     engine.dispose()
@@ -62,7 +62,7 @@ def test_legacy_backfill_and_enforcement(migrated):
 def test_missing_owner_is_not_claimed(tmp_path,monkeypatch):
     url=f'sqlite:///{tmp_path}/unclaimed.db'
     monkeypatch.setenv('DATABASE_URL',url);monkeypatch.delenv('AUTH_OWNER_USER_ID',raising=False)
-    command.upgrade(Config('alembic.ini'),'head')
+    command.upgrade(Config('alembic.ini'),'0009')
     with make_engine(url).connect() as db:
         assert db.execute(sa.text('SELECT status FROM workspaces')).scalar_one()=='unclaimed'
         assert db.execute(sa.text('SELECT count(*) FROM workspace_memberships')).scalar_one()==0
@@ -72,5 +72,5 @@ def test_invalid_owner_fails_before_schema_changes(tmp_path,monkeypatch):
     url=f'sqlite:///{tmp_path}/invalid.db'
     monkeypatch.setenv('DATABASE_URL',url);monkeypatch.setenv('AUTH_OWNER_USER_ID','not-a-user-uuid')
     cfg=Config('alembic.ini');command.upgrade(cfg,'0008')
-    with pytest.raises(ValueError):command.upgrade(cfg,'head')
+    with pytest.raises(ValueError):command.upgrade(cfg,'0009')
     assert 'workspaces' not in sa.inspect(make_engine(url)).get_table_names()

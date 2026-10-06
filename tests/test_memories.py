@@ -1,5 +1,5 @@
 import pytest
-from sqlalchemy.orm import Session
+from tenant_fixtures import Session
 from sqlalchemy import select, update
 from app.models import Entry, Knowledge
 from app.memory_models import ProjectEntry, MemoryRecord, MemoryProposal

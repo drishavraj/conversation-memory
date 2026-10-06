@@ -9,7 +9,7 @@ def uid(): return str(uuid4())
 
 class Project(WorkspaceOwned, Base):
     __tablename__='memory_projects'
-    __table_args__=(UniqueConstraint('theme_id','name_key'),)
+    __table_args__=(UniqueConstraint('workspace_id','theme_id','name_key'),)
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=uid)
     name: Mapped[str]=mapped_column(String(100))
     name_key: Mapped[str]=mapped_column(String(100))
@@ -51,11 +51,12 @@ class MemoryRecord(WorkspaceOwned, Base):
     updated_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now)
 
 class MemoryProposal(WorkspaceOwned, Base):
+    __table_args__=(UniqueConstraint('workspace_id','fingerprint'),)
     __tablename__='memory_proposals'
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=uid)
     project_id: Mapped[str]=mapped_column(ForeignKey('memory_projects.id'),index=True)
     entry_id: Mapped[str]=mapped_column(ForeignKey('entries.id'))
-    fingerprint: Mapped[str]=mapped_column(String(64),unique=True)
+    fingerprint: Mapped[str]=mapped_column(String(64))
     payload: Mapped[dict]=mapped_column(JSON)
     evidence: Mapped[list]=mapped_column(JSON)
     status: Mapped[str]=mapped_column(String(20),default='pending')

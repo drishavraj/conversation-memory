@@ -37,6 +37,10 @@ class StaleClaim(Exception):
     pass
 
 def process_one(sessions, provider=None):
+    from .tenancy import across_workspaces
+    return across_workspaces(_process_one,sessions,provider)
+
+def _process_one(sessions, provider=None):
     # Conditional update provides a single claimant even with concurrent pollers.
     with sessions() as db:
         job = db.scalar(select(Job).join(Entry, Entry.id == Job.entry_id).where(Job.status == "queued", or_(Job.next_attempt_at.is_(None), Job.next_attempt_at <= now())).order_by(Entry.uploaded_at, Job.id).limit(1))
@@ -144,6 +148,10 @@ def process_one(sessions, provider=None):
     return True
 
 def recover(sessions):
+    from .tenancy import across_workspaces
+    return across_workspaces(_recover,sessions)
+
+def _recover(sessions):
     # Only use after confirming old workers are stopped; release claims older than 15 minutes.
     with sessions() as db:
         for job in db.scalars(select(Job).where(Job.status == "processing", Job.claimed_at < now()-timedelta(minutes=15))):
