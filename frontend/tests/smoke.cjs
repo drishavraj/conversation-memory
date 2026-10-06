@@ -73,7 +73,7 @@ const fs = require("fs");
     ],
     embedding:{model:'configured-embedding'}
   };
-  let uploadedOptions;
+  let uploadedOptions, failMutation = true, failUpload = true;
   const entry = {
     id: "entry1",
     title: "Product review",
@@ -117,7 +117,12 @@ const fs = require("fs");
     else if (url.pathname === "/api/entries/upload") {
       const body=route.request().postData();
       if(!body.includes('saaras:v4') || !body.includes('"en","hi","mr"'))throw new Error('Upload lost processing choices');
+      await new Promise(resolve => setTimeout(resolve, 500));
+      if (failUpload) { failUpload=false; return route.fulfill({status:503,json:{detail:'Test upload failure'}}); }
       uploadedOptions=true; data=entry;
+    }
+    else if (url.pathname === '/api/entries/entry1/retry') {
+      entry.status='processing'; entry.job.error=null; data=entry;
     }
     else if (url.pathname === "/api/session")
       data = { status: "authenticated" };
@@ -129,7 +134,10 @@ const fs = require("fs");
         items: [item],
       };
     else if (url.pathname === "/api/entries/entry1") data = entry;
-    else if (url.pathname === "/api/actions") data = [item];
+    else if (url.pathname === "/api/actions") {
+      await new Promise(resolve => setTimeout(resolve, 400));
+      data = [item,{...item, id:'action2', text:'Unchanged task', status:'active'}].filter(i=>i.status === url.searchParams.get('status'));
+    }
     else if (url.pathname === "/api/chat")
       data = {
         status: "answered",
@@ -139,8 +147,15 @@ const fs = require("fs");
         ],
       };
     else if (url.pathname === "/api/entries/text") data = entry;
-    else if (url.pathname === "/api/knowledge/action1")
-      data = { ...item, status: "completed" };
+    else if (url.pathname === "/api/knowledge/action1") {
+      const body=route.request().postDataJSON();
+      if(body.status) {
+        await new Promise(resolve=>setTimeout(resolve,400));
+        if(failMutation) {failMutation=false;return route.fulfill({status:503,json:{detail:'Test update failure'}});}
+        item.status=body.status; item.version++;
+      }
+      data = item;
+    }
     await route.fulfill({ json: data });
   });
   await page.route("https://example.supabase.co/**", (route) =>
@@ -149,9 +164,20 @@ const fs = require("fs");
   await page.goto((process.env.UI_BASE_URL || "http://localhost:8000") + "/");
   await page.getByRole("heading", { name: "To-dos", exact:true }).waitFor();
   await page.getByRole("heading", { name: "Overdue" }).waitFor();
+  await page.locator('#todo-action2 summary').click();
+  await page.evaluate(()=>{window.unchangedRow=document.querySelector('#todo-action2');window.actionsHost=document.querySelector('#actionRows');});
+  const complete=page.getByRole('button',{name:'Complete: Send the updated API document.'});
+  await complete.click();
+  await page.locator('#todo-action1 [aria-busy="true"]').waitFor();
+  await page.getByText('Test update failure',{exact:true}).waitFor();
+  if(await complete.isDisabled())throw new Error('Failed completion cannot be retried');
+  await complete.click();
+  await page.locator('#todo-action1').waitFor({state:'detached'});
+  if(!await page.evaluate(()=>window.unchangedRow===document.querySelector('#todo-action2') && window.actionsHost===document.querySelector('#actionRows') && document.querySelector('#todo-action2 details').open))throw new Error('Completion replaced unrelated content');
+  item.status='active';
   await page.screenshot({path:"/tmp/todos-light.png",fullPage:true});
   await page.locator('[data-nav="Capture"]').click();
-  await page.locator('#saveCapture:not([disabled])').waitFor();
+  await page.locator('#saveCapture:not([disabled])').waitFor({state:'attached'});
   await page.locator('.env-banner').getByText('DEVELOPMENT · Test environment').waitFor();
   await page.locator('#settingsNav').click();
   await page.getByLabel('Colour mode').selectOption('dark');
@@ -167,17 +193,37 @@ const fs = require("fs");
   await page.getByText('Defaults saved. New uploads will use these choices.').waitFor();
   await page.screenshot({ path: "/tmp/memory-settings.png", fullPage: true });
   await page.locator('[data-nav="Capture"]').click();
-  await page.locator('#saveCapture:not([disabled])').waitFor();
+  await page.locator('#saveCapture:not([disabled])').waitFor({state:'attached'});
   if(await page.locator('#capture-summary').inputValue()!=='openai|gpt-4.1-mini')throw new Error('Default did not reach capture');
   await page.screenshot({ path: "/tmp/memory-desktop.png", fullPage: true });
   await page.locator('[data-nav="Library"]').click();
   await page.getByRole("heading", { name: "Product review" }).waitFor();
+  entry.status='processing';
+  entry.job={stage:'translation',attempts:1};
+  entry.processing_config={models:{summary:{provider:'gemini',model:'test-model'}}};
+  entry.completed_stages=[];
   await page.locator("[data-entry]").click();
   await page.getByRole("heading", { name: "Original text" }).waitFor();
+  await page.locator('#processingDetails summary').click();
+  await page.evaluate(()=>{window.originalSection=document.querySelector('#entryOriginal');window.processingDisclosure=document.querySelector('#processingDetails');});
+  entry.completed_stages=['translation'];
+  entry.job.stage='summary';
+  await page.getByText('1 of 3 stages complete',{exact:true}).waitFor();
+  await page.locator('#progress-summary.running').waitFor();
+  if(!await page.evaluate(()=>window.originalSection===document.querySelector('#entryOriginal') && window.processingDisclosure===document.querySelector('#processingDetails') && window.processingDisclosure.open))throw new Error('Polling replaced content or collapsed processing details');
+  entry.status='failed';
+  entry.job.error='provider_timeout';
+  await page.locator('#progress-summary.failed').waitFor();
+  await page.getByRole('button',{name:'Retry processing',exact:true}).click();
+  await page.locator('#progress-summary.running').waitFor();
+  if(await page.locator('#progress-translation.completed').count()!==1)throw new Error('Retry lost completed stage');
+  entry.status='ready';
   await page.getByRole("button", { name: "Correct", exact: true }).click();
   await page.getByLabel("Reason for correction").fill("Clarify wording");
   await page.getByRole("button", { name: "Save correction" }).click();
   await page.locator("dialog").waitFor({ state: "detached" });
+  await page.getByText("✓ Conversation ready",{exact:true}).waitFor();
+  if(await page.locator("#processingHistory").evaluate(el=>el.open))throw new Error("Ready history should start collapsed");
   await page.locator('[data-nav="Library"]').click();
   await page.locator('[data-view="Ask"]').click();
   await page.getByLabel("Ask your memory").fill("What did I commit to?");
@@ -195,7 +241,7 @@ const fs = require("fs");
   await page
     .getByRole("button", { name: "Record conversation", exact: true })
     .waitFor();
-  await page.locator('#saveCapture:not([disabled])').waitFor();
+  await page.locator('#saveCapture:not([disabled])').waitFor({state:'attached'});
   await page.getByText('Processing options', {exact:true}).click();
   await page.getByLabel('Transcription',{exact:true}).selectOption('sarvam|saaras:v4');
   for(const name of ['English','Hindi','Marathi'])await page.getByLabel(name,{exact:true}).check();
@@ -205,18 +251,31 @@ const fs = require("fs");
   await page.getByLabel('Audio file',{exact:true}).setInputFiles({name:'meeting.wav',mimeType:'audio/wav',buffer:Buffer.from('RIFF0000WAVEaudio')});
   await page.screenshot({path:'/tmp/memory-model-mobile.png',fullPage:true});
   await page.getByLabel('Theme',{exact:true}).selectOption('office');
+  await page.evaluate(()=>window.scrollTo(0,document.body.scrollHeight));
+  if(!await page.locator('#saveCapture').evaluate(el=>{const r=el.getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight;}))throw new Error('Save not visible after scrolling');
+
   await page.locator('#saveCapture').click();
+  await page.locator('#captureResult progress').waitFor();
+  await page.getByText('Test upload failure',{exact:true}).waitFor();
+  if(!await page.getByLabel('Audio file',{exact:true}).evaluate(el=>el.files.length===1))throw new Error('Failed upload lost file');
+  await page.locator('#saveCapture').click();
+  await page.locator('#captureResult progress').waitFor();
   await page.getByRole('heading',{name:'Original text'}).waitFor();
   if(!uploadedOptions)throw new Error('Upload not submitted');
   await page.locator('[data-nav="Capture"]').click();
   await page.locator('#record').click();
   await page.getByText('Recording · 0:00',{exact:true}).waitFor();
+  await page.evaluate(()=>window.scrollTo(0,document.body.scrollHeight));
+  if(!await page.locator('#finishRecord').evaluate(el=>{const r=el.getBoundingClientRect();const nav=document.querySelector('.sidebar').getBoundingClientRect();return r.top>=0&&r.bottom<nav.top;}))throw new Error('Finish control hidden behind navigation');
+
   await page.getByRole('button',{name:'Pause',exact:true}).click();
   await page.getByRole('button',{name:'Resume',exact:true}).waitFor();
   await page.getByRole('button',{name:'Resume',exact:true}).click();
   await page.waitForTimeout(1200);
   await page.getByRole('button',{name:'Finish recording',exact:true}).click();
   await page.getByLabel('Recording playback').waitFor();
+  if(!await page.locator('#saveCapture').evaluate(el=>{const r=el.getBoundingClientRect();const nav=document.querySelector('.sidebar').getBoundingClientRect();return r.top>=0&&r.bottom<nav.top;}))throw new Error('Save control hidden behind navigation');
+
   page.once('dialog',d=>d.dismiss());
   await page.locator('[data-nav="Library"]').click();
   await page.getByLabel('Recording playback').waitFor();

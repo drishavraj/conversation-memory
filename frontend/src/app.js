@@ -1,3 +1,5 @@
+import morphdom from "morphdom";
+import { processingSteps } from "./processing-progress.js";
 import { createClient } from "@supabase/supabase-js";
 const root = document.querySelector("#app");
 let appearance = 'system';
@@ -10,19 +12,21 @@ function applyAppearance() {
 }
 systemAppearance.addEventListener('change', applyAppearance);
 applyAppearance();
+let captureBusy = false;
 let previewURL, recordingPending = false, libraryQuery = '';
 function clearAudio() {
   if (previewURL) URL.revokeObjectURL(previewURL);
   previewURL = null; recordingFile = null;
 }
 function leaveCapture() {
+  if (captureBusy) { message("Please wait for your conversation to finish saving."); return false; }
   if (screen === 'Capture' && (recordingPending || recordingFile || recorder?.state === 'recording' || recorder?.state === 'paused')) {
     if (!confirm('Leave and discard this unsaved recording?')) return false;
   }
   stopRecording(); clearAudio(); return true;
 }
 window.addEventListener('beforeunload', e => {
-  if (recordingPending || recordingFile || recorder?.state === 'recording' || recorder?.state === 'paused') {
+  if (captureBusy || recordingPending || recordingFile || recorder?.state === 'recording' || recorder?.state === 'paused') {
     e.preventDefault(); e.returnValue = '';
   }
 });
@@ -85,6 +89,29 @@ function message(text, type = "error", target = root) {
   node.className = type;
   node.textContent = text;
 }
+// Reconcile refreshed data without discarding unchanged nodes or open disclosures.
+function updateContent(node, html) {
+  const next = node.cloneNode(false);
+  next.innerHTML = html;
+  morphdom(node, next, {
+    childrenOnly: true,
+    onBeforeElUpdated(from, to) {
+      if (from.tagName === 'DETAILS') to.open = from.open;
+      if (from.id === 'libraryQuery' || (from === document.activeElement && from.matches('input,textarea'))) {
+        to.value = from.value;
+      }
+      return !from.isEqualNode(to);
+    },
+  });
+}
+function savingProgress(percent) {
+  const host = document.querySelector('#captureResult');
+  if (!host) return;
+  const uploading = Number.isFinite(percent) && percent < 100;
+  const button = document.querySelector('#saveCapture');
+  if (button) button.textContent = uploading ? `Uploading… ${percent}%` : 'Saving…';
+  host.innerHTML = `<div class="save-progress" role="status"><p>${uploading ? `Uploading… ${percent}%` : 'Saving your conversation…'}</p><progress aria-label="${uploading ? 'Upload progress' : 'Saving conversation'}" ${uploading ? `value="${percent}" max="100"` : ''}></progress><p class="helper">${percent === 100 ? 'Upload received. Waiting for the server to confirm.' : 'Keep this page open. Your notes will process automatically after saving.'}</p></div>`;
+}
 async function api(path, options = {}) {
   const { data, error } = await auth.auth.getSession();
   if (error || !data.session)
@@ -96,7 +123,17 @@ async function api(path, options = {}) {
   };
   if (options.body && !(options.body instanceof FormData))
     headers["Content-Type"] = "application/json";
-  const response = await fetch("/api" + path, { ...options, headers });
+  const { onUploadProgress, ...requestOptions } = options;
+  const response = onUploadProgress ? await new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(requestOptions.method || 'POST', '/api' + path);
+    Object.entries(headers).forEach(([key, value]) => xhr.setRequestHeader(key, value));
+    xhr.upload.onprogress = e => { if (e.lengthComputable) onUploadProgress(Math.round(e.loaded / e.total * 100)); };
+    xhr.onload = () => resolve({ ok: xhr.status >= 200 && xhr.status < 300, status: xhr.status, json: async () => JSON.parse(xhr.responseText) });
+    xhr.onerror = () => reject(new Error('Upload interrupted. Your file is still selected; please try again.'));
+    xhr.onabort = () => reject(new Error('Upload cancelled. Please try again.'));
+    xhr.send(requestOptions.body);
+  }) : await fetch("/api" + path, { ...requestOptions, headers });
   let body;
   try {
     body = await response.json();
@@ -121,13 +158,28 @@ async function api(path, options = {}) {
   return body;
 }
 async function safe(button, work) {
+  if (button.disabled) return;
+  const original = button.innerHTML;
+  const saving = button.id === 'saveCapture';
+  const row = button.closest('.todo-row');
+  if (row) row.inert = true;
   button.disabled = true;
+  button.setAttribute('aria-busy', 'true');
+  button.insertAdjacentHTML('afterbegin', '<span class="busy-spinner" aria-hidden="true"></span>');
+  const captureControls = saving ? [...document.querySelectorAll('#capture input, #capture select, #capture textarea, #record, #discardAudio')] : [];
+  const controlStates = captureControls.map(el => el.disabled);
+  if (saving) { document.querySelector('#captureResult')?.replaceChildren(); captureBusy = true; savingProgress(); captureControls.forEach(el => el.disabled = true); }
   try {
     await work();
   } catch (e) {
-    message(e.message);
+    message(e.message, 'error', saving ? document.querySelector('#captureResult') || root : root);
   } finally {
     button.disabled = false;
+    if (button.hasAttribute('aria-busy')) button.innerHTML = original;
+    button.removeAttribute('aria-busy');
+    if (row) row.inert = false;
+    captureControls.forEach((el, index) => el.disabled = controlStates[index]);
+    if (saving) { captureBusy = false; document.querySelector('#captureResult .save-progress')?.remove(); }
   }
 }
 async function showAuth() {
@@ -286,6 +338,7 @@ function render() {
     .querySelectorAll("[data-nav]")
     .forEach((b) => b.classList.toggle("active", b.dataset.nav === (screen === "Ask" ? "Library" : screen)));
   const area = document.querySelector("#content");
+  delete area.dataset.entryId;
   area.innerHTML = `<div class="intro"><h1>${{Capture:'Record a conversation',Actions:'To-dos',Library:'Conversations',Ask:'Ask your memory',Settings:'Settings'}[screen]}</h1>${screen==='Actions'?btn('Record conversation','primary','id="quickRecord"'):''}</div>${['Library','Ask'].includes(screen)?`<div class="tabs">${btn('Conversations',screen==='Library'?'active':'','data-view="Library"')}${btn('Ask your memory',screen==='Ask'?'active':'','data-view="Ask"')}</div>`:''}<div id="panel"></div>`;
   document.querySelector('#quickRecord')?.addEventListener('click',()=>navigate('Capture'));
   root.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>navigate(b.dataset.view));
@@ -313,16 +366,57 @@ function eventISO(value) {
     abs = Math.abs(offset);
   return `${value}:00${sign}${String(Math.floor(abs / 60)).padStart(2, "0")}:${String(abs % 60).padStart(2, "0")}`;
 }
+let captureBarObserver;
+function positionCaptureBar() {
+  const panel = document.querySelector('.capture-panel'), bar = document.querySelector('#captureActions');
+  if (!panel || !bar) return;
+  const bounds = panel.getBoundingClientRect();
+  const nav = document.querySelector('.sidebar');
+  const navHeight = nav && getComputedStyle(nav).position === 'fixed' ? nav.getBoundingClientRect().height : 0;
+  const viewport = window.visualViewport;
+  const keyboardInset = viewport ? Math.max(0, innerHeight - viewport.height - viewport.offsetTop) : 0;
+  bar.style.left = `${bounds.left}px`; bar.style.width = `${bounds.width}px`;
+  bar.style.bottom = `${Math.max(navHeight, keyboardInset) + 8}px`;
+  panel.style.paddingBottom = `${bar.getBoundingClientRect().height + 24}px`;
+}
+window.addEventListener('resize', positionCaptureBar);
+window.visualViewport?.addEventListener('resize', positionCaptureBar);
+window.visualViewport?.addEventListener('scroll', positionCaptureBar);
+function syncCaptureActions() {
+  if (!document.querySelector('#captureActions')) return;
+  const active = recorder?.state === 'recording' || recorder?.state === 'paused';
+  const hasFile = Boolean(recordingFile || document.querySelector('#file')?.files.length);
+  const record = document.querySelector('#record'); if (record) record.hidden = active;
+  const finish = document.querySelector('#finishRecord');
+  if (finish) { finish.hidden = !active; finish.disabled = recordingPending; }
+  const pause = document.querySelector('#pauseRecord');
+  if (pause) { pause.hidden = !active; pause.textContent = recorder?.state === 'paused' ? 'Resume' : 'Pause'; }
+  const discard = document.querySelector('#discardAudio'); if (discard) discard.hidden = !recordingFile || active;
+  document.querySelector('#saveCapture').hidden = active || (mode === 'audio' && !hasFile);
+  document.querySelector('#captureHint').textContent = active ? 'Recording stays on this device until you save.' : mode === 'audio' && !hasFile ? 'Record or choose an audio file to save.' : 'Ready to save your conversation.';
+  positionCaptureBar();
+}
 function capture() {
   const captureVersion = requestVersion;
-  document.querySelector("#panel").innerHTML = `<section class="capture-panel"><div class="tabs capture-tabs">${[['audio','Record / audio'],['text','Text'],['document','Document']].map(([id,label])=>btn(label,mode===id?'active':'',`data-mode="${id}"`)).join('')}</div><form id="capture"><label for="captureTheme">Theme</label><select id="captureTheme" required><option value="">Choose a theme</option>${Object.entries(names).map(([id,n])=>`<option value="${id}" ${theme===id?'selected':''}>${n}</option>`).join('')}</select>${mode==='audio'?`<div class="recorder"><button id="record" type="button" class="record-button">${icon('M9 5a3 3 0 0 1 6 0v7a3 3 0 0 1-6 0V5ZM5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8')}<span>Record conversation</span></button><p id="recordState" role="status">Ready when you are.</p><button id="pauseRecord" type="button" class="secondary" hidden>Pause</button><div id="audioPreview"></div></div><details><summary>Upload an audio file</summary><label for="file">Audio file</label><input id="file" type="file" accept=".mp3,.m4a,.wav,.ogg,.flac,.webm"><p class="helper">Up to 25 MB</p></details>`:mode==='text'?'<label for="transcript">Conversation or note</label><textarea id="transcript" required maxlength="200000" placeholder="Paste a conversation or write a note…"></textarea>':'<label for="file">Document</label><input id="file" type="file" accept=".txt,.pdf,.docx"><p class="helper">TXT, DOCX or text-based PDF · Up to 10 MB</p>'}<details class="capture-details"><summary>Title &amp; date</summary><label for="title">Title (optional)</label><input id="title" maxlength="200" placeholder="A title will be added if left blank"><label for="event">When did it happen?</label><input id="event" type="datetime-local" value="${localNow()}" required><p class="helper">${esc(Intl.DateTimeFormat().resolvedOptions().timeZone)} · Used to interpret dates in the conversation.</p></details><details class="processing-options"><summary>Processing options</summary><div id="processingControls">Loading model choices…</div></details><div class="sectiongap">${btn('Save conversation','primary','id="saveCapture" disabled')}</div></form><div id="captureResult" aria-live="polite"></div></section>`;
+  document.querySelector("#panel").innerHTML = `<section class="capture-panel"><div class="tabs capture-tabs">${[['audio','Record / audio'],['text','Text'],['document','Document']].map(([id,label])=>btn(label,mode===id?'active':'',`data-mode="${id}"`)).join('')}</div><form id="capture"><label for="captureTheme">Theme</label><select id="captureTheme" required><option value="">Choose a theme</option>${Object.entries(names).map(([id,n])=>`<option value="${id}" ${theme===id?'selected':''}>${n}</option>`).join('')}</select>${mode==='audio'?`<div class="recorder"><button id="record" type="button" class="record-button">${icon('M9 5a3 3 0 0 1 6 0v7a3 3 0 0 1-6 0V5ZM5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8')}<span>Record conversation</span></button><p id="recordState" role="status">Ready when you are.</p><div id="audioPreview"></div></div><details><summary>Upload an audio file</summary><label for="file">Audio file</label><input id="file" type="file" accept=".mp3,.m4a,.wav,.ogg,.flac,.webm"><p class="helper">Up to 25 MB</p></details>`:mode==='text'?'<label for="transcript">Conversation or note</label><textarea id="transcript" required maxlength="200000" placeholder="Paste a conversation or write a note…"></textarea>':'<label for="file">Document</label><input id="file" type="file" accept=".txt,.pdf,.docx"><p class="helper">TXT, DOCX or text-based PDF · Up to 10 MB</p>'}<details class="capture-details"><summary>Title &amp; date</summary><label for="title">Title (optional)</label><input id="title" maxlength="200" placeholder="A title will be added if left blank"><label for="event">When did it happen?</label><input id="event" type="datetime-local" value="${localNow()}" required><p class="helper">${esc(Intl.DateTimeFormat().resolvedOptions().timeZone)} · Used to interpret dates in the conversation.</p></details><details class="processing-options"><summary>Processing options</summary><div id="processingControls">Loading model choices…</div></details><div id="captureActions" class="capture-actions" aria-label="Conversation actions"><p id="captureHint" class="helper"></p><div class="capture-action-buttons">${mode==='audio'?'<button id="pauseRecord" type="button" class="secondary" hidden>Pause</button><button id="discardAudio" type="button" class="secondary" hidden>Discard recording</button><button id="finishRecord" type="button" class="primary" hidden>Finish recording</button>':''}${btn('Save conversation','primary','id="saveCapture" disabled')}</div><div id="captureResult" aria-live="polite"></div></div></form></section>`;
+  captureBarObserver?.disconnect();
+  captureBarObserver = new ResizeObserver(positionCaptureBar);
+  for (const selector of ['.capture-panel', '#captureActions', '.sidebar']) captureBarObserver.observe(document.querySelector(selector));
+  syncCaptureActions();
+  document.querySelector('#finishRecord')?.addEventListener('click', () => { document.querySelector('#finishRecord').disabled = true; document.querySelector('#pauseRecord').disabled = true; recordAudio({currentTarget:document.querySelector('#record')}); });
+  document.querySelector('#discardAudio')?.addEventListener('click', () => {
+    clearAudio();document.querySelector('#audioPreview').replaceChildren();
+    const button=document.querySelector('#record');button.textContent='Record conversation';button.classList.remove('has-recording');
+    document.querySelector('#recordState').textContent='Ready when you are.';syncCaptureActions();
+  });
   document.querySelector('#pauseRecord')?.addEventListener('click', e=>{
     if(recorder?.state==='recording'){recorder.pause();e.target.textContent='Resume';}
     else if(recorder?.state==='paused'){recorder.resume();e.target.textContent='Pause';}
+    syncCaptureActions();
   });
   document.querySelector('#file')?.addEventListener('change',e=>{
     if(recordingFile && e.target.files.length && !confirm('Replace the recorded audio with this file?')) {e.target.value='';return;}
-    clearAudio(); document.querySelector('#audioPreview')?.replaceChildren();
+    clearAudio(); document.querySelector('#audioPreview')?.replaceChildren(); syncCaptureActions();
   });
   let captureSettings;
   api('/ai-settings').then(data => {
@@ -376,7 +470,7 @@ function capture() {
         data.set("title", title);
         data.set("theme_id", theme_id);
         data.set("event_at", event_at);
-        entry = await api("/entries/upload", { method: "POST", body: data });
+        entry = await api("/entries/upload", { method: "POST", body: data, onUploadProgress: savingProgress });
       }
       if (captureVersion !== requestVersion) return;
       document.querySelector("#captureResult").innerHTML =
@@ -413,11 +507,12 @@ async function recordAudio(e) {
       button.disabled=false;button.textContent='Record again';button.classList.remove('is-recording');button.classList.add('has-recording');pause.hidden=true;
       document.querySelector('#file').disabled=false;
       document.querySelector('#recordState').textContent='Recording ready. Listen before saving.';
-      document.querySelector('#audioPreview').innerHTML=`<audio controls src="${previewURL}" aria-label="Recording playback"></audio><button type="button" class="link" id="discardAudio">Discard recording</button>`;
-      document.querySelector('#discardAudio').onclick=()=>{clearAudio();document.querySelector('#audioPreview').replaceChildren();button.textContent='Record conversation';button.classList.remove('has-recording');document.querySelector('#recordState').textContent='Ready when you are.';};
+      document.querySelector('#audioPreview').innerHTML=`<audio controls src="${previewURL}" aria-label="Recording playback"></audio>`;
+      pause.disabled=false;syncCaptureActions();
     };
     active.start(1000);button.textContent='Finish recording';button.classList.remove('has-recording');button.classList.add('is-recording');
     document.querySelector('#recordState').textContent='Recording · 0:00';
+    syncCaptureActions();
     recordTimer=setInterval(()=>{
       if(active.state==='recording')seconds++;
       const node=document.querySelector('#recordState');
@@ -427,7 +522,7 @@ async function recordAudio(e) {
   } catch(error) {
     stream?.getTracks().forEach(t=>t.stop());
     if(version===requestVersion)message(error.name==='NotAllowedError'?'Allow microphone access to record, or upload a file.':error.message);
-  } finally {recordingPending=false;if(button.isConnected)button.disabled=false;}
+  } finally {recordingPending=false;if(button.isConnected)button.disabled=false;syncCaptureActions();}
 }
 function stopRecording() {
   clearInterval(recordTimer);
@@ -495,16 +590,21 @@ function sourceDialog(source) {
   };
   dialog.showModal();
 }
+function onClick(selector, handler) {
+  const node = document.querySelector(selector);
+  if (node) node.onclick = handler;
+}
 function scope() {
   return theme ? "&theme_id=" + encodeURIComponent(theme) : "";
 }
 async function library(version, offset = 0) {
   const panel = document.querySelector("#panel");
-  panel.innerHTML = '<p class="muted" role="status">Loading your entries…</p>';
+  clearTimeout(refreshTimer);
+  if (!panel.children.length) panel.innerHTML = '<p class="muted" role="status">Loading your entries…</p>';
   try {
     const rows = await api(`/entries?limit=20&offset=${offset}&q=${encodeURIComponent(libraryQuery)}${scope()}`);
     if (version !== requestVersion) return;
-    panel.innerHTML = `<form id="conversationSearch" class="row library-search"><input id="libraryQuery" type="search" aria-label="Search conversations" placeholder="Search titles and transcripts" maxlength="200" value="${esc(libraryQuery)}">${btn("Search","secondary")}</form><div class="row spread" style="margin-bottom:18px"><span class="helper">${esc(theme ? names[theme] : "All themes")} · Page ${offset / 20 + 1}</span>${btn("Refresh", "secondary", 'id="refresh"')}</div>${rows.length ? rows.map((r) => `<button class="entry" data-entry="${esc(r.id)}"><div class="row spread">${badge(r.theme_id)}<span class="pill ${esc(r.status)}">${esc(r.status)}</span></div><h3>${esc(r.title)}</h3><p class="meta">${esc(r.input_type || "text")} · ${date(r.event_at || r.uploaded_at)}</p><p class="muted">${esc((r.original_text || "").slice(0, 150))}${(r.original_text || "").length > 150 ? "…" : ""}</p></button>`).join("") : '<div class="card empty">Nothing saved here yet. Capture a conversation to start your memory.</div>'}<div class="row">${offset ? btn("Previous", "secondary", 'id="prev"') : ""}${rows.length === 20 ? btn("Next page", "secondary", 'id="next"') : ""}</div>`;
+    updateContent(panel, `<form id="conversationSearch" class="row library-search"><input id="libraryQuery" type="search" aria-label="Search conversations" placeholder="Search titles and transcripts" maxlength="200" value="${esc(libraryQuery)}">${btn("Search","secondary")}</form><div class="row spread" style="margin-bottom:18px"><span class="helper">${esc(theme ? names[theme] : "All themes")} · Page ${offset / 20 + 1}</span>${btn("Refresh", "secondary", 'id="refresh"')}</div>${rows.length ? rows.map((r) => `<button class="entry" data-entry="${esc(r.id)}"><div class="row spread">${badge(r.theme_id)}<span class="pill ${esc(r.status)}">${esc(r.status)}</span></div><h3>${esc(r.title)}</h3><p class="meta">${esc(r.input_type || "text")} · ${date(r.event_at || r.uploaded_at)}</p><p class="muted">${esc((r.original_text || "").slice(0, 150))}${(r.original_text || "").length > 150 ? "…" : ""}</p></button>`).join("") : '<div class="card empty">Nothing saved here yet. Capture a conversation to start your memory.</div>'}<div class="row">${offset ? btn("Previous", "secondary", 'id="prev"') : ""}${rows.length === 20 ? btn("Next page", "secondary", 'id="next"') : ""}</div>`);
     panel
       .querySelectorAll("[data-entry]")
       .forEach((b) => (b.onclick = () => openEntry(b.dataset.entry)));
@@ -532,31 +632,34 @@ async function openEntry(id) {
     .forEach((b) => b.classList.toggle("active", b.dataset.nav === "Library"));
   const version = ++requestVersion,
     area = document.querySelector("#content");
-  area.innerHTML = '<p class="muted" role="status">Opening entry…</p>';
+  if (area.dataset.entryId !== id) {
+    area.insertAdjacentHTML('beforeend', '<p id="openingEntry" class="muted" role="status">Opening entry…</p>');
+  }
   try {
     const [entry, knowledge] = await Promise.all([
       api("/entries/" + id),
       api("/entries/" + id + "/knowledge"),
     ]);
     if (version !== requestVersion) return;
-    area.innerHTML = `${btn("← Conversations", "link", 'id="back"')}<div class="intro"><h1>${esc(entry.title)}</h1><div class="row">${badge(entry.theme_id)}<span class="pill ${esc(entry.status)}">${esc(entry.status)}</span><span class="meta">${date(entry.event_at || entry.uploaded_at)}</span></div></div>${entry.status === "failed" ? `<div class="error">Processing failed: ${esc(entry.job?.error || "Unknown error")}. ${btn("Retry processing", "secondary", 'id="retry"')}</div>` : ""}${["queued", "processing"].includes(entry.status) ? `<p class="notice" role="status">Preparing your notes… This page updates automatically.</p>` : ""}${processingDetails(entry)}${knowledge.summary ? `<section class="card soft"><span class="eyebrow">The essentials</span><p>${esc(knowledge.summary)}</p></section>` : ""}${knowledge.items.length ? `<h2>What to remember</h2>${knowledge.items.map((item) => itemCard(item, true)).join("")}` : ""}<section class="card"><h2>Original ${entry.input_type === "audio" ? "transcript" : "text"}</h2><p class="text">${esc(entry.original_text || "Available after processing.")}</p>${entry.input_type !== "text" ? btn("Download original file", "secondary", 'id="download"') : ""}</section>${knowledge.english_text ? `<section class="card"><h2>English version</h2><p class="text">${esc(knowledge.english_text)}</p></section>` : ""}${entry.index_status === "failed" ? `<p class="notice">Semantic indexing failed. ${btn("Retry indexing", "secondary", 'id="indexRetry"')}</p>` : ""}`;
+    updateContent(area, `${btn("← Conversations", "link", 'id="back"')}<div class="intro"><h1>${esc(entry.title)}</h1><div class="row">${badge(entry.theme_id)}<span class="pill ${esc(entry.status)}">${esc(entry.status)}</span><span class="meta">${date(entry.event_at || entry.uploaded_at)}</span></div></div>${processingProgress(entry)}${processingDetails(entry)}${knowledge.summary ? `<section class="card soft" id="entrySummary"><span class="eyebrow">The essentials</span><p>${esc(knowledge.summary)}</p></section>` : ""}${knowledge.items.length ? `<h2>What to remember</h2>${knowledge.items.map((item) => itemCard(item, true)).join("")}` : ""}<section class="card" id="entryOriginal"><h2>Original ${entry.input_type === "audio" ? "transcript" : "text"}</h2><p class="text">${esc(entry.original_text || "Available after processing.")}</p>${entry.input_type !== "text" ? btn("Download original file", "secondary", 'id="download"') : ""}</section>${knowledge.english_text ? `<section class="card" id="entryEnglish"><h2>English version</h2><p class="text">${esc(knowledge.english_text)}</p></section>` : ""}${entry.index_status === "failed" ? `<p class="notice">Semantic indexing failed. ${btn("Retry indexing", "secondary", 'id="indexRetry"')}</p>` : ""}`);
+    area.dataset.entryId = id;
     document.querySelector("#back").onclick = () => {
       screen = "Library";
       render();
     };
-    document.querySelector("#retry")?.addEventListener("click", (e) =>
+    onClick("#retry", (e) =>
       safe(e.target, async () => {
         await api(`/entries/${id}/retry`, { method: "POST" });
         openEntry(id);
       }),
     );
-    document.querySelector("#indexRetry")?.addEventListener("click", (e) =>
+    onClick("#indexRetry", (e) =>
       safe(e.target, async () => {
         await api(`/entries/${id}/index/retry`, { method: "POST" });
         openEntry(id);
       }),
     );
-    document.querySelector("#download")?.addEventListener("click", (e) =>
+    onClick("#download", (e) =>
       safe(e.target, async () => {
         const { data } = await auth.auth.getSession();
         const r = await fetch(`/api/entries/${id}/file`, {
@@ -592,13 +695,14 @@ function due(item) {
   return `Due ${formatted}`;
 }
 function itemCard(item, edit = false) {
-  return `<article class="card"><div class="row spread"><div class="row">${badge(item.theme_id)}<span class="pill">${esc(item.kind)}</span>${item.certainty === "tentative" ? '<span class="pill tentative">Tentative</span>' : ""}</div><span class="meta">${esc(item.status)}</span></div><h3 class="sectiongap">${esc(item.text)}</h3><p class="meta">${esc(item.owner || "Owner unspecified")} · ${due(item)}</p><blockquote class="quote">${esc(item.evidence)}</blockquote><div class="row">${item.kind === "action" && item.status === "active" ? btn("Mark complete", "secondary", `data-status="completed" data-item="${esc(item.id)}"`) + btn("Dismiss", "link", `data-status="dismissed" data-item="${esc(item.id)}"`) : ""}${item.kind === "action" && item.status !== "active" ? btn("Reopen", "secondary", `data-status="active" data-item="${esc(item.id)}"`) : ""}${edit ? btn("Correct", "link", `data-edit="${esc(item.id)}"`) : btn("Open source", "link", `data-entry="${esc(item.source_entry_id)}"`)}</div></article>`;
+  return `<article class="card" id="item-${esc(item.id)}"><div class="row spread"><div class="row">${badge(item.theme_id)}<span class="pill">${esc(item.kind)}</span>${item.certainty === "tentative" ? '<span class="pill tentative">Tentative</span>' : ""}</div><span class="meta">${esc(item.status)}</span></div><h3 class="sectiongap">${esc(item.text)}</h3><p class="meta">${esc(item.owner || "Owner unspecified")} · ${due(item)}</p><blockquote class="quote">${esc(item.evidence)}</blockquote><div class="row">${item.kind === "action" && item.status === "active" ? btn("Mark complete", "secondary", `data-status="completed" data-item="${esc(item.id)}"`) + btn("Dismiss", "link", `data-status="dismissed" data-item="${esc(item.id)}"`) : ""}${item.kind === "action" && item.status !== "active" ? btn("Reopen", "secondary", `data-status="active" data-item="${esc(item.id)}"`) : ""}${edit ? btn("Correct", "link", `data-edit="${esc(item.id)}"`) : btn("Open source", "link", `data-entry="${esc(item.source_entry_id)}"`)}</div></article>`;
 }
 function wireItems(items, reload) {
   root.querySelectorAll("[data-status]").forEach(
     (b) =>
       (b.onclick = () =>
         safe(b, async () => {
+          const version = requestVersion;
           const item = items.find((x) => x.id === b.dataset.item);
           await api("/knowledge/" + item.id, {
             method: "PATCH",
@@ -608,7 +712,7 @@ function wireItems(items, reload) {
               status: b.dataset.status,
             }),
           });
-          await reload();
+          if (version === requestVersion) await reload();
         })),
   );
   root.querySelectorAll("[data-edit]").forEach(
@@ -624,7 +728,7 @@ function wireItems(items, reload) {
     .forEach((b) => (b.onclick = () => openEntry(b.dataset.entry)));
 }
 async function actions(version) {
-  document.querySelector("#panel").innerHTML =
+  if (!document.querySelector("#actionRows")) document.querySelector("#panel").innerHTML =
     `<div class="tabs">${["active", "completed", "dismissed"].map((s) => btn(s[0].toUpperCase() + s.slice(1), actionStatus === s ? "active" : "", `data-filter="${s}"`)).join("")}</div><div id="actionRows" role="status">Loading to-dos…</div><div id="attentionRows"></div>`;
   document.querySelectorAll("[data-filter]").forEach(
     (b) =>
@@ -646,7 +750,7 @@ async function actions(version) {
       ['No date',items.filter(i=>i.certainty!=='tentative' && !i.due_date)],
       ['Tentative · needs confirmation',items.filter(i=>i.certainty==='tentative')]
     ] : [[actionStatus==='completed'?'Completed':'Dismissed',items]];
-    document.querySelector('#actionRows').innerHTML=items.length?groups.filter(([,rows])=>rows.length).map(([label,rows])=>`<section class="todo-group"><h2>${label}<span class="count">${rows.length}</span></h2>${rows.sort((a,b)=>(a.due_date||'').localeCompare(b.due_date||'')).map(i=>`<article class="todo-row">${btn(i.status==='active'?'○':'✓','check-button',`data-status="${i.status==='active'?'completed':'active'}" data-item="${esc(i.id)}" aria-label="${i.status==='active'?'Complete':'Reopen'}: ${esc(i.text)}"`)}<details><summary>${esc(i.text)}<span class="todo-meta">${badge(i.theme_id)}<span class="${i.due_date && i.due_date<today && i.status==='active'?'overdue':''}">${esc(due(i))}</span>${i.owner?`<span>${esc(i.owner)}</span>`:''}</span></summary><blockquote class="quote">${esc(i.evidence)}</blockquote><div class="row">${btn('Open conversation','link',`data-entry="${esc(i.source_entry_id)}"`)}${btn('Correct','link',`data-edit="${esc(i.id)}"`)}${i.status==='active'?btn('Dismiss','link',`data-status="dismissed" data-item="${esc(i.id)}"`):''}</div></details></article>`).join('')}</section>`).join(''):'<div class="empty">No '+actionStatus+' to-dos here.</div>';
+    updateContent(document.querySelector('#actionRows'), items.length?groups.filter(([,rows])=>rows.length).map(([label,rows])=>`<section class="todo-group"><h2>${label}<span class="count">${rows.length}</span></h2>${rows.sort((a,b)=>(a.due_date||'').localeCompare(b.due_date||'')).map(i=>`<article class="todo-row" id="todo-${esc(i.id)}">${btn(i.status==='active'?'○':'✓','check-button',`data-status="${i.status==='active'?'completed':'active'}" data-item="${esc(i.id)}" aria-label="${i.status==='active'?'Complete':'Reopen'}: ${esc(i.text)}"`)}<details><summary>${esc(i.text)}<span class="todo-meta">${badge(i.theme_id)}<span class="${i.due_date && i.due_date<today && i.status==='active'?'overdue':''}">${esc(due(i))}</span>${i.owner?`<span>${esc(i.owner)}</span>`:''}</span></summary><blockquote class="quote">${esc(i.evidence)}</blockquote><div class="row">${btn('Open conversation','link',`data-entry="${esc(i.source_entry_id)}"`)}${btn('Correct','link',`data-edit="${esc(i.id)}"`)}${i.status==='active'?btn('Dismiss','link',`data-status="dismissed" data-item="${esc(i.id)}"`):''}</div></details></article>`).join('')}</section>`).join(''):'<div class="empty">No '+actionStatus+' to-dos here.</div>');
     if (items.length === 100)
       document
         .querySelector("#actionRows")
@@ -804,11 +908,21 @@ async function settingsScreen(version){
     })};
   }catch(error){if(version===requestVersion)message(error.message)}
 }
+function processingProgress(entry) {
+  const steps = processingSteps(entry);
+  const ready = entry.status === 'ready';
+  const failed = entry.status === 'failed';
+  const states = {completed:'Completed', running:'In progress', waiting:'Waiting to resume', pending:'Upcoming', failed:'Needs retry'};
+  const rows = `<ol class="processing-steps">${steps.map((step,index)=>`<li id="progress-${esc(step.id)}" class="processing-step ${step.state}" ${step.state==='running'?'aria-current="step"':''}><span class="step-marker" aria-hidden="true">${step.state==='completed'?'✓':step.state==='running'?'<span class="busy-spinner"></span>':step.state==='failed'?'!':index+1}</span><div><div class="step-label">${esc(step.label)}</div><span class="helper">${states[step.state]}</span>${step.state==='failed'?`<p class="helper">Completed work is saved.</p>${btn('Retry processing','secondary','id="retry"')}`:''}</div></li>`).join('')}</ol>`;
+  if (ready) return `<p class="success" id="processingReady" role="status">✓ Conversation ready</p><details class="card" id="processingHistory"><summary>Processing history</summary>${rows}</details>`;
+  const title = failed ? 'Processing needs attention' : entry.status === 'queued' ? 'Saved · waiting to continue' : 'Preparing your conversation';
+  return `<section class="card processing-progress" id="processingProgress" aria-label="Conversation processing"><div role="status" aria-live="polite"><h2>${title}</h2><p class="helper">${steps.filter(s=>s.state==='completed').length} of ${steps.length} stages complete</p>${rows}</div>${failed?`<p class="error">${esc(entry.job?.error || 'Processing could not finish.')}</p>${steps.some(s=>s.state==='failed')?'':btn('Retry processing','secondary','id="retry"')}`:'<p class="helper">Your conversation is saved. You can leave this page while processing continues.</p>'}</section>`;
+}
 function processingDetails(entry){
   const config=entry.processing_config;
   if(!config)return '<p class="helper">This entry predates saved model selections.</p>';
   const completed=entry.completed_stages||[];
-  return `<details class="card"><summary>Processing details</summary><p class="helper">Choices saved when this entry was queued. A retry keeps these choices and completed stages.</p>${Object.entries(config.models).map(([task,choice])=>`<p><strong>${esc(taskNames[task]||task)}</strong><br>${esc(choice.provider)} / ${esc(choice.model)} <span class="pill">${completed.includes(task)?'Completed':'Not completed'}</span></p>`).join('')}<p class="helper">Expected languages: ${esc(config.languages?.join(', ')||'Automatic detection')}</p></details>`;
+  return `<details class="card" id="processingDetails"><summary>Models &amp; processing settings</summary><p class="helper">Choices saved when this entry was queued. A retry keeps these choices and completed stages.</p>${Object.entries(config.models).map(([task,choice])=>`<p><strong>${esc(taskNames[task]||task)}</strong><br>${esc(choice.provider)} / ${esc(choice.model)} <span class="pill">${completed.includes(task)?'Completed':'Not completed'}</span></p>`).join('')}<p class="helper">Expected languages: ${esc(config.languages?.join(', ')||'Automatic detection')}</p></details>`;
 }
 
 init();
