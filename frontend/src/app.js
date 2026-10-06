@@ -108,6 +108,8 @@ function savingProgress(percent) {
   const host = document.querySelector('#captureResult');
   if (!host) return;
   const uploading = Number.isFinite(percent) && percent < 100;
+  const button = document.querySelector('#saveCapture');
+  if (button) button.textContent = uploading ? `Uploading… ${percent}%` : 'Saving…';
   host.innerHTML = `<div class="save-progress" role="status"><p>${uploading ? `Uploading… ${percent}%` : 'Saving your conversation…'}</p><progress aria-label="${uploading ? 'Upload progress' : 'Saving conversation'}" ${uploading ? `value="${percent}" max="100"` : ''}></progress><p class="helper">${percent === 100 ? 'Upload received. Waiting for the server to confirm.' : 'Keep this page open. Your notes will process automatically after saving.'}</p></div>`;
 }
 async function api(path, options = {}) {
@@ -166,11 +168,11 @@ async function safe(button, work) {
   button.insertAdjacentHTML('afterbegin', '<span class="busy-spinner" aria-hidden="true"></span>');
   const captureControls = saving ? [...document.querySelectorAll('#capture input, #capture select, #capture textarea, #record, #discardAudio')] : [];
   const controlStates = captureControls.map(el => el.disabled);
-  if (saving) { captureBusy = true; savingProgress(); captureControls.forEach(el => el.disabled = true); }
+  if (saving) { document.querySelector('#captureResult')?.replaceChildren(); captureBusy = true; savingProgress(); captureControls.forEach(el => el.disabled = true); }
   try {
     await work();
   } catch (e) {
-    message(e.message);
+    message(e.message, 'error', saving ? document.querySelector('#captureResult') || root : root);
   } finally {
     button.disabled = false;
     if (button.hasAttribute('aria-busy')) button.innerHTML = original;
@@ -364,16 +366,57 @@ function eventISO(value) {
     abs = Math.abs(offset);
   return `${value}:00${sign}${String(Math.floor(abs / 60)).padStart(2, "0")}:${String(abs % 60).padStart(2, "0")}`;
 }
+let captureBarObserver;
+function positionCaptureBar() {
+  const panel = document.querySelector('.capture-panel'), bar = document.querySelector('#captureActions');
+  if (!panel || !bar) return;
+  const bounds = panel.getBoundingClientRect();
+  const nav = document.querySelector('.sidebar');
+  const navHeight = nav && getComputedStyle(nav).position === 'fixed' ? nav.getBoundingClientRect().height : 0;
+  const viewport = window.visualViewport;
+  const keyboardInset = viewport ? Math.max(0, innerHeight - viewport.height - viewport.offsetTop) : 0;
+  bar.style.left = `${bounds.left}px`; bar.style.width = `${bounds.width}px`;
+  bar.style.bottom = `${Math.max(navHeight, keyboardInset) + 8}px`;
+  panel.style.paddingBottom = `${bar.getBoundingClientRect().height + 24}px`;
+}
+window.addEventListener('resize', positionCaptureBar);
+window.visualViewport?.addEventListener('resize', positionCaptureBar);
+window.visualViewport?.addEventListener('scroll', positionCaptureBar);
+function syncCaptureActions() {
+  if (!document.querySelector('#captureActions')) return;
+  const active = recorder?.state === 'recording' || recorder?.state === 'paused';
+  const hasFile = Boolean(recordingFile || document.querySelector('#file')?.files.length);
+  const record = document.querySelector('#record'); if (record) record.hidden = active;
+  const finish = document.querySelector('#finishRecord');
+  if (finish) { finish.hidden = !active; finish.disabled = recordingPending; }
+  const pause = document.querySelector('#pauseRecord');
+  if (pause) { pause.hidden = !active; pause.textContent = recorder?.state === 'paused' ? 'Resume' : 'Pause'; }
+  const discard = document.querySelector('#discardAudio'); if (discard) discard.hidden = !recordingFile || active;
+  document.querySelector('#saveCapture').hidden = active || (mode === 'audio' && !hasFile);
+  document.querySelector('#captureHint').textContent = active ? 'Recording stays on this device until you save.' : mode === 'audio' && !hasFile ? 'Record or choose an audio file to save.' : 'Ready to save your conversation.';
+  positionCaptureBar();
+}
 function capture() {
   const captureVersion = requestVersion;
-  document.querySelector("#panel").innerHTML = `<section class="capture-panel"><div class="tabs capture-tabs">${[['audio','Record / audio'],['text','Text'],['document','Document']].map(([id,label])=>btn(label,mode===id?'active':'',`data-mode="${id}"`)).join('')}</div><form id="capture"><label for="captureTheme">Theme</label><select id="captureTheme" required><option value="">Choose a theme</option>${Object.entries(names).map(([id,n])=>`<option value="${id}" ${theme===id?'selected':''}>${n}</option>`).join('')}</select>${mode==='audio'?`<div class="recorder"><button id="record" type="button" class="record-button">${icon('M9 5a3 3 0 0 1 6 0v7a3 3 0 0 1-6 0V5ZM5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8')}<span>Record conversation</span></button><p id="recordState" role="status">Ready when you are.</p><button id="pauseRecord" type="button" class="secondary" hidden>Pause</button><div id="audioPreview"></div></div><details><summary>Upload an audio file</summary><label for="file">Audio file</label><input id="file" type="file" accept=".mp3,.m4a,.wav,.ogg,.flac,.webm"><p class="helper">Up to 25 MB</p></details>`:mode==='text'?'<label for="transcript">Conversation or note</label><textarea id="transcript" required maxlength="200000" placeholder="Paste a conversation or write a note…"></textarea>':'<label for="file">Document</label><input id="file" type="file" accept=".txt,.pdf,.docx"><p class="helper">TXT, DOCX or text-based PDF · Up to 10 MB</p>'}<details class="capture-details"><summary>Title &amp; date</summary><label for="title">Title (optional)</label><input id="title" maxlength="200" placeholder="A title will be added if left blank"><label for="event">When did it happen?</label><input id="event" type="datetime-local" value="${localNow()}" required><p class="helper">${esc(Intl.DateTimeFormat().resolvedOptions().timeZone)} · Used to interpret dates in the conversation.</p></details><details class="processing-options"><summary>Processing options</summary><div id="processingControls">Loading model choices…</div></details><div class="sectiongap">${btn('Save conversation','primary','id="saveCapture" disabled')}</div></form><div id="captureResult" aria-live="polite"></div></section>`;
+  document.querySelector("#panel").innerHTML = `<section class="capture-panel"><div class="tabs capture-tabs">${[['audio','Record / audio'],['text','Text'],['document','Document']].map(([id,label])=>btn(label,mode===id?'active':'',`data-mode="${id}"`)).join('')}</div><form id="capture"><label for="captureTheme">Theme</label><select id="captureTheme" required><option value="">Choose a theme</option>${Object.entries(names).map(([id,n])=>`<option value="${id}" ${theme===id?'selected':''}>${n}</option>`).join('')}</select>${mode==='audio'?`<div class="recorder"><button id="record" type="button" class="record-button">${icon('M9 5a3 3 0 0 1 6 0v7a3 3 0 0 1-6 0V5ZM5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8')}<span>Record conversation</span></button><p id="recordState" role="status">Ready when you are.</p><div id="audioPreview"></div></div><details><summary>Upload an audio file</summary><label for="file">Audio file</label><input id="file" type="file" accept=".mp3,.m4a,.wav,.ogg,.flac,.webm"><p class="helper">Up to 25 MB</p></details>`:mode==='text'?'<label for="transcript">Conversation or note</label><textarea id="transcript" required maxlength="200000" placeholder="Paste a conversation or write a note…"></textarea>':'<label for="file">Document</label><input id="file" type="file" accept=".txt,.pdf,.docx"><p class="helper">TXT, DOCX or text-based PDF · Up to 10 MB</p>'}<details class="capture-details"><summary>Title &amp; date</summary><label for="title">Title (optional)</label><input id="title" maxlength="200" placeholder="A title will be added if left blank"><label for="event">When did it happen?</label><input id="event" type="datetime-local" value="${localNow()}" required><p class="helper">${esc(Intl.DateTimeFormat().resolvedOptions().timeZone)} · Used to interpret dates in the conversation.</p></details><details class="processing-options"><summary>Processing options</summary><div id="processingControls">Loading model choices…</div></details><div id="captureActions" class="capture-actions" aria-label="Conversation actions"><p id="captureHint" class="helper"></p><div class="capture-action-buttons">${mode==='audio'?'<button id="pauseRecord" type="button" class="secondary" hidden>Pause</button><button id="discardAudio" type="button" class="secondary" hidden>Discard recording</button><button id="finishRecord" type="button" class="primary" hidden>Finish recording</button>':''}${btn('Save conversation','primary','id="saveCapture" disabled')}</div><div id="captureResult" aria-live="polite"></div></div></form></section>`;
+  captureBarObserver?.disconnect();
+  captureBarObserver = new ResizeObserver(positionCaptureBar);
+  for (const selector of ['.capture-panel', '#captureActions', '.sidebar']) captureBarObserver.observe(document.querySelector(selector));
+  syncCaptureActions();
+  document.querySelector('#finishRecord')?.addEventListener('click', () => { document.querySelector('#finishRecord').disabled = true; document.querySelector('#pauseRecord').disabled = true; recordAudio({currentTarget:document.querySelector('#record')}); });
+  document.querySelector('#discardAudio')?.addEventListener('click', () => {
+    clearAudio();document.querySelector('#audioPreview').replaceChildren();
+    const button=document.querySelector('#record');button.textContent='Record conversation';button.classList.remove('has-recording');
+    document.querySelector('#recordState').textContent='Ready when you are.';syncCaptureActions();
+  });
   document.querySelector('#pauseRecord')?.addEventListener('click', e=>{
     if(recorder?.state==='recording'){recorder.pause();e.target.textContent='Resume';}
     else if(recorder?.state==='paused'){recorder.resume();e.target.textContent='Pause';}
+    syncCaptureActions();
   });
   document.querySelector('#file')?.addEventListener('change',e=>{
     if(recordingFile && e.target.files.length && !confirm('Replace the recorded audio with this file?')) {e.target.value='';return;}
-    clearAudio(); document.querySelector('#audioPreview')?.replaceChildren();
+    clearAudio(); document.querySelector('#audioPreview')?.replaceChildren(); syncCaptureActions();
   });
   let captureSettings;
   api('/ai-settings').then(data => {
@@ -464,11 +507,12 @@ async function recordAudio(e) {
       button.disabled=false;button.textContent='Record again';button.classList.remove('is-recording');button.classList.add('has-recording');pause.hidden=true;
       document.querySelector('#file').disabled=false;
       document.querySelector('#recordState').textContent='Recording ready. Listen before saving.';
-      document.querySelector('#audioPreview').innerHTML=`<audio controls src="${previewURL}" aria-label="Recording playback"></audio><button type="button" class="link" id="discardAudio">Discard recording</button>`;
-      document.querySelector('#discardAudio').onclick=()=>{clearAudio();document.querySelector('#audioPreview').replaceChildren();button.textContent='Record conversation';button.classList.remove('has-recording');document.querySelector('#recordState').textContent='Ready when you are.';};
+      document.querySelector('#audioPreview').innerHTML=`<audio controls src="${previewURL}" aria-label="Recording playback"></audio>`;
+      pause.disabled=false;syncCaptureActions();
     };
     active.start(1000);button.textContent='Finish recording';button.classList.remove('has-recording');button.classList.add('is-recording');
     document.querySelector('#recordState').textContent='Recording · 0:00';
+    syncCaptureActions();
     recordTimer=setInterval(()=>{
       if(active.state==='recording')seconds++;
       const node=document.querySelector('#recordState');
@@ -478,7 +522,7 @@ async function recordAudio(e) {
   } catch(error) {
     stream?.getTracks().forEach(t=>t.stop());
     if(version===requestVersion)message(error.name==='NotAllowedError'?'Allow microphone access to record, or upload a file.':error.message);
-  } finally {recordingPending=false;if(button.isConnected)button.disabled=false;}
+  } finally {recordingPending=false;if(button.isConnected)button.disabled=false;syncCaptureActions();}
 }
 function stopRecording() {
   clearInterval(recordTimer);

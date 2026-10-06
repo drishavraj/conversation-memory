@@ -177,7 +177,7 @@ const fs = require("fs");
   item.status='active';
   await page.screenshot({path:"/tmp/todos-light.png",fullPage:true});
   await page.locator('[data-nav="Capture"]').click();
-  await page.locator('#saveCapture:not([disabled])').waitFor();
+  await page.locator('#saveCapture:not([disabled])').waitFor({state:'attached'});
   await page.locator('.env-banner').getByText('DEVELOPMENT · Test environment').waitFor();
   await page.locator('#settingsNav').click();
   await page.getByLabel('Colour mode').selectOption('dark');
@@ -193,7 +193,7 @@ const fs = require("fs");
   await page.getByText('Defaults saved. New uploads will use these choices.').waitFor();
   await page.screenshot({ path: "/tmp/memory-settings.png", fullPage: true });
   await page.locator('[data-nav="Capture"]').click();
-  await page.locator('#saveCapture:not([disabled])').waitFor();
+  await page.locator('#saveCapture:not([disabled])').waitFor({state:'attached'});
   if(await page.locator('#capture-summary').inputValue()!=='openai|gpt-4.1-mini')throw new Error('Default did not reach capture');
   await page.screenshot({ path: "/tmp/memory-desktop.png", fullPage: true });
   await page.locator('[data-nav="Library"]').click();
@@ -241,7 +241,7 @@ const fs = require("fs");
   await page
     .getByRole("button", { name: "Record conversation", exact: true })
     .waitFor();
-  await page.locator('#saveCapture:not([disabled])').waitFor();
+  await page.locator('#saveCapture:not([disabled])').waitFor({state:'attached'});
   await page.getByText('Processing options', {exact:true}).click();
   await page.getByLabel('Transcription',{exact:true}).selectOption('sarvam|saaras:v4');
   for(const name of ['English','Hindi','Marathi'])await page.getByLabel(name,{exact:true}).check();
@@ -251,6 +251,9 @@ const fs = require("fs");
   await page.getByLabel('Audio file',{exact:true}).setInputFiles({name:'meeting.wav',mimeType:'audio/wav',buffer:Buffer.from('RIFF0000WAVEaudio')});
   await page.screenshot({path:'/tmp/memory-model-mobile.png',fullPage:true});
   await page.getByLabel('Theme',{exact:true}).selectOption('office');
+  await page.evaluate(()=>window.scrollTo(0,document.body.scrollHeight));
+  if(!await page.locator('#saveCapture').evaluate(el=>{const r=el.getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight;}))throw new Error('Save not visible after scrolling');
+
   await page.locator('#saveCapture').click();
   await page.locator('#captureResult progress').waitFor();
   await page.getByText('Test upload failure',{exact:true}).waitFor();
@@ -262,12 +265,17 @@ const fs = require("fs");
   await page.locator('[data-nav="Capture"]').click();
   await page.locator('#record').click();
   await page.getByText('Recording · 0:00',{exact:true}).waitFor();
+  await page.evaluate(()=>window.scrollTo(0,document.body.scrollHeight));
+  if(!await page.locator('#finishRecord').evaluate(el=>{const r=el.getBoundingClientRect();const nav=document.querySelector('.sidebar').getBoundingClientRect();return r.top>=0&&r.bottom<nav.top;}))throw new Error('Finish control hidden behind navigation');
+
   await page.getByRole('button',{name:'Pause',exact:true}).click();
   await page.getByRole('button',{name:'Resume',exact:true}).waitFor();
   await page.getByRole('button',{name:'Resume',exact:true}).click();
   await page.waitForTimeout(1200);
   await page.getByRole('button',{name:'Finish recording',exact:true}).click();
   await page.getByLabel('Recording playback').waitFor();
+  if(!await page.locator('#saveCapture').evaluate(el=>{const r=el.getBoundingClientRect();const nav=document.querySelector('.sidebar').getBoundingClientRect();return r.top>=0&&r.bottom<nav.top;}))throw new Error('Save control hidden behind navigation');
+
   page.once('dialog',d=>d.dismiss());
   await page.locator('[data-nav="Library"]').click();
   await page.getByLabel('Recording playback').waitFor();
