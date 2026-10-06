@@ -3,6 +3,7 @@ const fs = require("fs");
 (async () => {
   const browser = await chromium.launch({
     headless: true,
+    args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"],
     ...(process.env.CHROMIUM_PATH
       ? { executablePath: process.env.CHROMIUM_PATH }
       : {}),
@@ -146,10 +147,21 @@ const fs = require("fs");
     route.fulfill({ json: { user, all: [], totp: [], phone: [] } }),
   );
   await page.goto((process.env.UI_BASE_URL || "http://localhost:8000") + "/");
-  await page.getByRole("heading", { name: "Keep the thought." }).waitFor();
+  await page.getByRole("heading", { name: "To-dos", exact:true }).waitFor();
+  await page.getByRole("heading", { name: "Overdue" }).waitFor();
+  await page.screenshot({path:"/tmp/todos-light.png",fullPage:true});
+  await page.locator('[data-nav="Capture"]').click();
   await page.locator('#saveCapture:not([disabled])').waitFor();
   await page.locator('.env-banner').getByText('DEVELOPMENT · Test environment').waitFor();
-  await page.locator('[data-nav="Settings"]').click();
+  await page.locator('#settingsNav').click();
+  await page.getByLabel('Colour mode').selectOption('dark');
+  if(await page.locator('html').getAttribute('data-appearance')!=='dark')throw new Error('Dark mode failed');
+  await page.reload();
+  await page.getByRole('heading',{name:'To-dos',exact:true}).waitFor();
+  if(await page.locator('html').getAttribute('data-appearance')!=='dark')throw new Error('Dark preference not persisted');
+  await page.screenshot({path:'/tmp/todos-dark.png',fullPage:true});
+  await page.locator('#settingsNav').click();
+  await page.getByText('AI model defaults',{exact:true}).click();
   await page.getByLabel('Summary', {exact:true}).selectOption('openai|gpt-4.1-mini');
   await page.getByRole('button',{name:'Save defaults',exact:true}).click();
   await page.getByText('Defaults saved. New uploads will use these choices.').waitFor();
@@ -166,27 +178,30 @@ const fs = require("fs");
   await page.getByLabel("Reason for correction").fill("Clarify wording");
   await page.getByRole("button", { name: "Save correction" }).click();
   await page.locator("dialog").waitFor({ state: "detached" });
-  await page.locator('[data-nav="Ask"]').click();
+  await page.locator('[data-nav="Library"]').click();
+  await page.locator('[data-view="Ask"]').click();
   await page.getByLabel("Ask your memory").fill("What did I commit to?");
   await page.getByRole("button", { name: "Find an answer" }).click();
   await page.getByRole("button", { name: "Source 1" }).click();
   await page.getByRole("dialog").waitFor();
   await page.getByRole("button", { name: "Close", exact: true }).click();
   await page.locator('[data-nav="Actions"]').click();
-  await page.getByRole("button", { name: "Mark complete" }).waitFor();
+  await page.getByRole("button", { name: "Complete: Send the updated API document." }).waitFor();
   await page.screenshot({ path: "/tmp/memory-actions.png", fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.locator('[data-nav="Capture"]').click();
   await page.screenshot({ path: "/tmp/memory-mobile.png", fullPage: true });
-  await page.getByRole("button", { name: "Audio", exact: true }).click();
+  await page.getByRole("button", { name: "Record / audio", exact: true }).click();
   await page
-    .getByRole("button", { name: "Record audio", exact: true })
+    .getByRole("button", { name: "Record conversation", exact: true })
     .waitFor();
   await page.locator('#saveCapture:not([disabled])').waitFor();
   await page.getByText('Processing options', {exact:true}).click();
   await page.getByLabel('Transcription',{exact:true}).selectOption('sarvam|saaras:v4');
   for(const name of ['English','Hindi','Marathi'])await page.getByLabel(name,{exact:true}).check();
-  await page.getByLabel('Give it a title',{exact:true}).fill('Mixed meeting');
+  await page.getByText('Title & date',{exact:true}).click();
+  await page.getByLabel('Title (optional)',{exact:true}).fill('Mixed meeting');
+  await page.getByText('Upload an audio file',{exact:true}).click();
   await page.getByLabel('Audio file',{exact:true}).setInputFiles({name:'meeting.wav',mimeType:'audio/wav',buffer:Buffer.from('RIFF0000WAVEaudio')});
   await page.screenshot({path:'/tmp/memory-model-mobile.png',fullPage:true});
   await page.getByLabel('Theme',{exact:true}).selectOption('office');
@@ -194,12 +209,35 @@ const fs = require("fs");
   await page.getByRole('heading',{name:'Original text'}).waitFor();
   if(!uploadedOptions)throw new Error('Upload not submitted');
   await page.locator('[data-nav="Capture"]').click();
+  await page.locator('#record').click();
+  await page.getByText('Recording · 0:00',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'Pause',exact:true}).click();
+  await page.getByRole('button',{name:'Resume',exact:true}).waitFor();
+  await page.getByRole('button',{name:'Resume',exact:true}).click();
+  await page.waitForTimeout(1200);
+  await page.getByRole('button',{name:'Finish recording',exact:true}).click();
+  await page.getByLabel('Recording playback').waitFor();
+  page.once('dialog',d=>d.dismiss());
+  await page.locator('[data-nav="Library"]').click();
+  await page.getByLabel('Recording playback').waitFor();
+  await page.screenshot({path:'/tmp/record-review-dark.png',fullPage:true});
+  await page.getByRole('button',{name:'Discard recording',exact:true}).click();
+  if(await page.locator('audio').count())throw new Error('Discard left recording preview');
+  await page.locator('#settingsNav').click();
+  await page.getByLabel('Colour mode').selectOption('system');
+  await page.emulateMedia({colorScheme:'light'});
+  if(await page.locator('html').getAttribute('data-appearance')!=='light')throw new Error('System light failed');
+  await page.emulateMedia({colorScheme:'dark'});
+  await page.waitForFunction(()=>document.documentElement.dataset.appearance==='dark');
+  await page.locator('[data-nav="Capture"]').click();
   await page.getByRole("button", { name: "Document", exact: true }).click();
   await page.getByLabel("Document", { exact: true }).waitFor();
   if (
     await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)
   )
     throw new Error("Mobile overflow");
+  await page.setViewportSize({width:320,height:700});
+  if(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth))throw new Error('Small phone overflow');
   if (errors.length) throw new Error(errors.join("\n"));
   console.log(
     "UI navigation, source citation, correction dialog, media tabs and mobile layout passed.",
@@ -260,7 +298,7 @@ const fs = require("fs");
   if (authenticatedRequests) throw new Error("Private API accessed before MFA");
   await loginPage.getByLabel("Six-digit authenticator code").fill("123456");
   await loginPage.getByRole("button", { name: "Verify and continue" }).click();
-  await loginPage.getByRole("heading", { name: "Keep the thought." }).waitFor();
+  await loginPage.getByRole("heading", { name: "To-dos",exact:true }).waitFor();
   console.log(
     "Password login requires MFA before private API requests: passed.",
   );

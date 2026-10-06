@@ -10,7 +10,7 @@ from typing import Literal
 from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select, text
+from sqlalchemy import select, text, or_, func
 from sqlalchemy.exc import IntegrityError
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
@@ -143,10 +143,13 @@ def create_app(database_url=None, owner_token=None, answer_provider=None, embedd
         return {**entry_dict(entry),"duplicate":False}
 
     @app.get("/api/entries", dependencies=[Depends(authorize)])
-    def entries(theme_id: Literal["personal", "side-projects", "office"] | None = None, limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0), session=Depends(db)):
+    def entries(theme_id: Literal["personal", "side-projects", "office"] | None = None, limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0), q: str = Query("", max_length=200), session=Depends(db)):
         query = select(Entry).order_by(Entry.uploaded_at.desc(), Entry.id)
         if theme_id:
             query = query.where(Entry.theme_id == theme_id)
+        if q.strip():
+            term = q.strip().lower()
+            query = query.where(or_(func.lower(Entry.title).contains(term, autoescape=True), func.lower(Entry.original_text).contains(term, autoescape=True)))
         return [entry_dict(row) for row in session.scalars(query.offset(offset).limit(limit))]
 
     @app.get("/api/entries/{entry_id}", dependencies=[Depends(authorize)])
