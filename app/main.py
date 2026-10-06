@@ -187,6 +187,8 @@ def create_app(database_url=None, owner_token=None, answer_provider=None, embedd
 
     from .memories import router_for as memories_router
     app.include_router(memories_router(authorize, db, answer_provider))
+    from .memory_chats import router_for as memory_chats_router
+    app.include_router(memory_chats_router(authorize, db, answer_provider))
     from .ai_settings import router_for as settings_router
     app.include_router(settings_router(authorize, db))
     from .knowledge_api import router_for

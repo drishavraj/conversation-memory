@@ -69,3 +69,32 @@ class MemoryRevision(Base):
     after: Mapped[dict]=mapped_column(JSON)
     reason: Mapped[str]=mapped_column(Text)
     created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now)
+
+class ChatThread(Base):
+    __tablename__='memory_chat_threads'
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=uid)
+    project_id: Mapped[str]=mapped_column(ForeignKey('memory_projects.id'),index=True)
+    topic_id: Mapped[str | None]=mapped_column(ForeignKey('memory_topics.id'),nullable=True)
+    title: Mapped[str]=mapped_column(String(120))
+    version: Mapped[int]=mapped_column(default=0)
+    pending_turn_id: Mapped[str | None]=mapped_column(String(36),nullable=True)
+    created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now)
+    updated_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now,index=True)
+
+class ChatTurn(Base):
+    __tablename__='memory_chat_turns'
+    __table_args__=(UniqueConstraint('thread_id','request_id'),UniqueConstraint('thread_id','sequence'))
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=uid)
+    thread_id: Mapped[str]=mapped_column(ForeignKey('memory_chat_threads.id'),index=True)
+    request_id: Mapped[str]=mapped_column(String(36))
+    sequence: Mapped[int]=mapped_column()
+    question: Mapped[str]=mapped_column(Text)
+    include_history: Mapped[bool]=mapped_column(default=False)
+    status: Mapped[str]=mapped_column(String(20),default='running')
+    response: Mapped[dict | None]=mapped_column(JSON,nullable=True)
+    error: Mapped[str | None]=mapped_column(String(80),nullable=True)
+    model: Mapped[dict]=mapped_column(JSON)
+    lease: Mapped[str]=mapped_column(String(36))
+    context_info: Mapped[dict]=mapped_column(JSON,default=dict)
+    created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now)
+    updated_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now)
