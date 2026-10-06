@@ -1,0 +1,33 @@
+const {chromium}=require('playwright');
+(async()=>{
+ const browser=await chromium.launch();const page=await browser.newPage({viewport:{width:1280,height:900}});page.setDefaultTimeout(12000);
+ const errors=[];page.on('pageerror',e=>errors.push(e.message));
+ const token=process.env.RELEASE_TEST_TOKEN;
+ const user={id:'owner',email:'owner@example.com',aud:'authenticated',role:'authenticated',app_metadata:{},user_metadata:{full_name:'Release Owner'}};
+ await page.addInitScript(({token,user})=>localStorage.setItem('sb-example-auth-token',JSON.stringify({access_token:token,refresh_token:'test-refresh',expires_in:3600,expires_at:Math.floor(Date.now()/1000)+3600,token_type:'bearer',user})),{token,user});
+ await page.route('https://example.supabase.co/**',r=>r.fulfill({json:{user,all:[],totp:[],phone:[]}}));
+ await page.goto(process.env.UI_BASE_URL);
+ await page.locator('[data-nav="Memories"]').click();
+ await page.getByRole('button',{name:'Release pilot Office',exact:true}).click();
+ await page.getByRole('button',{name:'MVP Topic',exact:true}).click();
+ await page.locator('[data-pane="ask"]').click();
+ await page.getByRole('button',{name:'New chat',exact:true}).click();
+ await page.getByLabel('Message',{exact:true}).fill('What did we agree?');
+ await page.getByRole('button',{name:'Send',exact:true}).click();
+ await page.locator('.chat-answer').getByText('We agreed a managed pilot.',{exact:true}).waitFor();
+ await page.getByRole('button',{name:'Expand chat',exact:true}).click();
+ await page.getByLabel('Message',{exact:true}).fill('What about the pilot?');
+ await page.getByRole('button',{name:'Send',exact:true}).click();
+ await page.locator('.chat-turn').nth(1).locator('.chat-answer').getByText('We agreed a managed pilot.',{exact:true}).waitFor();
+ await page.getByRole('button',{name:'Return to pane',exact:true}).waitFor();
+ await page.getByRole('button',{name:'Source 1',exact:true}).first().click();
+ await page.getByRole('dialog').getByRole('heading',{name:'Supporting evidence'}).waitFor();
+ await page.getByRole('button',{name:'Back to chat',exact:true}).click();
+ await page.reload();
+ await page.locator('[data-nav="Chats"]').click();
+ await page.locator('[data-thread]').first().click();
+ await page.locator('.chat-turn').nth(1).locator('.chat-answer').getByText('We agreed a managed pilot.',{exact:true}).waitFor();
+ for(const width of [390,320]){await page.setViewportSize({width,height:844});if(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth))throw Error('Overflow '+width);await page.getByRole('button',{name:'Source 1',exact:true}).first().click();await page.getByRole('button',{name:'Back to chat',exact:true}).click();}
+ if(errors.length)throw Error(errors.join('\n'));
+ await browser.close();console.log('Real HTTP, migrations, durable chat reload, scoped follow-up and citation UI passed.');
+})().catch(e=>{console.error(e);process.exit(1)});
