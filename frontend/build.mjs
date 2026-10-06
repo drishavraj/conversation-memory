@@ -12,6 +12,7 @@ for (const file of [
   "index.html",
   "style.css",
   "design-system.css",
+  "memory-map.css",
   "manifest.webmanifest",
   "icon.svg",
   "icon-180.png",

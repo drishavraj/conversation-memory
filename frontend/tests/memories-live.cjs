@@ -124,9 +124,11 @@ const fs = require("fs");
   await page.getByLabel('Topic name').fill('Demo');
   await page.getByRole('dialog').getByRole('button',{name:'Save',exact:true}).click();
   await page.locator('[data-cloud="t1"]').click();
+  await page.locator('[data-pane="sources"]').click();
   await page.getByRole('button',{name:'Link a conversation',exact:true}).click();
   await page.getByRole('dialog').getByLabel('Conversation',{exact:true}).selectOption('e1');
   await page.getByRole('dialog').getByRole('button',{name:'Save',exact:true}).click();
+  await page.locator('[data-pane="overview"]').click();
   await page.getByRole('button',{name:'Review suggestions',exact:true}).click();
   await page.getByLabel('Suggested memory').waitFor();
   await page.getByRole('button',{name:'Accept',exact:true}).click();
@@ -152,6 +154,23 @@ const fs = require("fs");
     await page.getByRole('button',{name:'Ask about this',exact:true}).click();
   }
   await page.screenshot({path:'/tmp/memories-live-mobile.png',fullPage:true});
+  await page.setViewportSize({width:1440,height:1000});
+  for(const count of [1,4,12,30]){
+    projects=Array.from({length:count},(_,i)=>({id:'layout-'+i,name:['PNB Genie','CCP','NPCI AtOM','Memory Organization'][i%4]+(i>3?' '+i:''),theme_id:i%4===3?'side-projects':'office'}));
+    await page.locator('[data-nav="Actions"]').click();await page.locator('[data-nav="Memories"]').click();
+    await page.locator(`[data-cloud="layout-${count-1}"]`).waitFor();
+    await page.locator('#memoryFit').click();
+    const boxes=await page.locator('[data-cloud]').evaluateAll(nodes=>nodes.map(n=>{const r=n.getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height};}));
+    for(let i=0;i<boxes.length;i++)for(let j=i+1;j<boxes.length;j++){const a=boxes[i],b=boxes[j];if(a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y)throw Error('Cloud collision '+count);}
+    const transform=await page.locator('#memoryClouds').evaluate(el=>el.style.transform);
+    await page.locator('#memoryZoomIn').click();
+    if(transform===await page.locator('#memoryClouds').evaluate(el=>el.style.transform))throw Error('Zoom did not change map');
+    await page.locator('#memoryFit').click();
+    if(count===4)await page.screenshot({path:'/tmp/memories-four-projects.png',fullPage:true});
+    await page.locator('#memoryView').click();
+    if(await page.locator('#memoryClouds').getAttribute('class')!=='memory-clouds memory-list')throw Error('List mode failed');
+    await page.locator('#memoryView').click();
+  }
   if(errors.length)throw Error(errors.join('\n'));
   console.log('Live-data Memories UI: project/topic creation, scoped linking, proposal acceptance, cited Ask, and phone layout passed.');
   await browser.close();

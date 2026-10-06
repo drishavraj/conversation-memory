@@ -1,53 +1,67 @@
+import { cloudLayout, createMemoryMap } from './memory-map.js';
 // Real project data; no sample responses or synthetic relationships.
 export function mountMemories(host, {api, esc, theme, openEntry, active}) {
-  let project=null, topic=null, view='map', offset=0, topicOffset=0, memoryOffset=0, query='', detail=null, timer, request=0;
-  let scope=null, answer=null;
+  let project=null, topic=null, view='map', offset=0, memoryOffset=0, query='', detail=null, timer, request=0;
+  let scope=null, answer=null, paneScreen='overview', openPane=false;
+  const mapCache=new Map();
   const names={office:'Office',personal:'Personal','side-projects':'Side Projects'};
   const q=s=>host.querySelector(s);
   const button=(label,attrs='')=>`<button type="button" class="secondary" ${attrs}>${label}</button>`;
   const fail=e=>{if(active()){q('#memoryNotice').textContent=e.message;q('#memoryNotice').hidden=false;}};
-  host.innerHTML=`<section id="memoryWorkspace"><div id="memoryNotice" class="error" role="alert" hidden></div><nav id="memoryBreadcrumb" aria-label="Memory location"></nav><div class="memory-toolbar"><input id="memorySearch" type="search" placeholder="Find a project…" aria-label="Search projects or topics" maxlength="200">${button('List view','id="memoryView"')}${button('New project','id="memoryCreate"')}${button('Ask','id="memoryAsk" hidden')}</div><div class="memory-layout"><div id="memoryStage"><div id="memoryClouds" class="memory-clouds" aria-live="polite">Loading memories…</div><div id="memoryPagination" class="row"></div><div id="memoryManagement"></div></div><aside id="memoryRail" hidden><div class="row spread">${button('← Back to map','id="memoryClose"')}<span id="memoryScope" class="helper"></span></div><div id="memoryContent"></div></aside></div></section>`;
+  host.innerHTML=`<section id="memoryWorkspace"><div id="memoryNotice" class="error" role="alert" hidden></div><nav id="memoryBreadcrumb" aria-label="Memory location"></nav><div class="memory-toolbar"><input id="memorySearch" type="search" placeholder="Find a project…" aria-label="Search projects or topics" maxlength="200">${button('List view','id="memoryView"')}${button('New project','id="memoryCreate"')}${button('Project overview','id="memoryAsk" hidden')}</div><div class="memory-layout"><div id="memoryStage"><div id="memoryViewport" tabindex="0" role="region" aria-label="Memory map. Drag empty space or use arrow keys to pan."><div id="memoryClouds" class="memory-clouds" aria-live="polite">Loading memories…</div></div><div id="memoryMapControls" class="row">${button('−','id="memoryZoomOut" aria-label="Zoom out"')}${button('+','id="memoryZoomIn" aria-label="Zoom in"')}${button('Fit all','id="memoryFit"')}<span class="helper">Drag to explore · List view for easy scanning</span></div><div id="memoryPagination" class="row"></div></div><aside id="memoryRail" hidden><div class="row spread">${button('← Back to map','id="memoryClose"')}<span id="memoryScope" class="helper"></span></div><div class="memory-pane-tabs" aria-label="Topic sections">${button('Overview','data-pane="overview"')}${button('Ask','data-pane="ask"')}${button('Sources','data-pane="sources"')}</div><div id="memoryContent"></div><div id="memoryManagement" hidden></div></aside></div></section>`;
+  const map=createMemoryMap(q('#memoryViewport'),q('#memoryClouds'));
+  q('#memoryFit').onclick=()=>map.fit();q('#memoryZoomIn').onclick=()=>map.zoom(1.2);q('#memoryZoomOut').onclick=()=>map.zoom(1/1.2);
+  host.querySelectorAll('[data-pane]').forEach(b=>b.onclick=()=>{if(b.dataset.pane==='ask')showAsk();else if(b.dataset.pane==='sources')showSources();else showOverview();});
   q('#memoryView').onclick=()=>{view=view==='map'?'list':'map';q('#memoryView').textContent=view==='map'?'List view':'Map view';drawClouds();};
-  q('#memorySearch').oninput=e=>{query=e.target.value;if(project){topicOffset=0;drawClouds();}else{offset=0;loadProjects();}};
+  q('#memorySearch').oninput=e=>{query=e.target.value;if(project){drawClouds();}else{offset=0;loadProjects();}};
   q('#memoryCreate').onclick=()=>project?createTopic():createProject();
-  q('#memoryAsk').onclick=()=>showAsk();
-  q('#memoryClose').onclick=()=>{q('#memoryWorkspace').classList.remove('memory-detail-open');q('#memoryRail').hidden=true;};
+  q('#memoryAsk').onclick=()=>{topic=null;memoryOffset=0;loadProject(false,true);};
+  q('#memoryClose').onclick=()=>{openPane=false;q('#memoryWorkspace').classList.remove('memory-detail-open');q('#memoryRail').hidden=true;q(`[data-cloud="${topic?.id||''}"]`)?.focus();};
   let projects=[],hasMore=false;
   function animate(back=false){if(matchMedia('(prefers-reduced-motion: reduce)').matches)return;q('#memoryClouds').animate([{transform:`scale(${back?1.08:.85})`,opacity:.4},{transform:'scale(1)',opacity:1}],{duration:360,easing:'cubic-bezier(.2,.75,.25,1)'});}
   function breadcrumbs(){
     q('#memoryBreadcrumb').innerHTML=button('All memories','data-home')+(project?` <span class="helper">/</span> ${button(esc(project.name),'data-project')}`:'')+(topic?` <span class="helper">/ ${esc(topic.name)}</span>`:'');
-    q('[data-home]').onclick=()=>{clearTimeout(timer);project=null;topic=null;detail=null;query='';offset=0;q('#memorySearch').value='';q('#memoryRail').hidden=true;q('#memoryWorkspace').classList.remove('memory-detail-open');q('#memoryManagement').replaceChildren();q('#memorySearch').placeholder='Find a project…';q('#memoryCreate').textContent='New project';q('#memoryAsk').hidden=true;loadProjects();};
-    if(project)q('[data-project]').onclick=()=>{topic=null;memoryOffset=0;q('#memoryWorkspace').classList.remove('memory-detail-open');loadProject();};
+    q('[data-home]').onclick=()=>{clearTimeout(timer);project=null;topic=null;detail=null;openPane=false;query='';q('#memorySearch').value='';q('#memoryRail').hidden=true;q('#memoryWorkspace').classList.remove('memory-detail-open');q('#memoryManagement').replaceChildren();q('#memorySearch').placeholder='Find a project…';q('#memoryCreate').textContent='New project';q('#memoryAsk').hidden=true;loadProjects();};
+    if(project)q('[data-project]').onclick=()=>{topic=null;openPane=false;memoryOffset=0;q('#memoryRail').hidden=true;q('#memoryWorkspace').classList.remove('memory-detail-open');loadProject();};
   }
   async function loadProjects(){
     const version=++request;
-    try{const data=await api(`/memories/projects?limit=12&offset=${offset}&q=${encodeURIComponent(query)}${theme?'&theme_id='+encodeURIComponent(theme):''}`);if(!active()||version!==request)return;projects=data.items;hasMore=data.has_more;breadcrumbs();drawClouds();q('#memoryPagination').innerHTML=(offset?button('Previous','data-prev'):'')+(hasMore?button('Next projects','data-next'):'');q('[data-prev]')?.addEventListener('click',()=>{offset-=12;loadProjects();});q('[data-next]')?.addEventListener('click',()=>{offset+=12;loadProjects();});}catch(e){fail(e);}
+    try{const data=await api(`/memories/projects?limit=30&offset=${offset}&q=${encodeURIComponent(query)}${theme?'&theme_id='+encodeURIComponent(theme):''}`);if(!active()||version!==request)return;projects=data.items;hasMore=data.has_more;breadcrumbs();drawClouds();q('#memoryPagination').innerHTML=(offset?button('Previous','data-prev'):'')+(hasMore?button('Next projects','data-next'):'');q('[data-prev]')?.addEventListener('click',()=>{offset-=30;loadProjects();});q('[data-next]')?.addEventListener('click',()=>{offset+=30;loadProjects();});}catch(e){fail(e);}
   }
   function drawClouds(){
-    const filtered=project?(detail?.topics||[]).filter(t=>t.name.toLowerCase().includes(query.toLowerCase())):projects;
-    const items=project?filtered.slice(topicOffset,topicOffset+12):filtered;
-    if(project){q('#memoryPagination').innerHTML=(topicOffset?button('Previous topics','data-topics-prev'):'')+(filtered.length>topicOffset+12?button('More topics','data-topics-next'):'');q('[data-topics-prev]')?.addEventListener('click',()=>{topicOffset-=12;drawClouds();});q('[data-topics-next]')?.addEventListener('click',()=>{topicOffset+=12;drawClouds();});}
+    const all=project?(detail?.topics||[]):projects;
+    const items=all.filter(t=>!project||t.name.toLowerCase().includes(query.toLowerCase()));
+    const key=project?project.id:'projects-'+offset+'-'+theme;
+    const known=mapCache.get(key)?.items||[];
+    const merged=[...known,...all.filter(x=>!known.some(k=>k.id===x.id))];
+    const signature=merged.map(x=>x.id).join(',');
+    if(mapCache.get(key)?.signature!==signature)mapCache.set(key,{signature,items:merged,layout:cloudLayout(merged)});
+    const layout=mapCache.get(key).layout;
     q('#memoryClouds').className=view==='map'?'memory-clouds':'memory-clouds memory-list';
-    q('#memoryClouds').innerHTML=items.length?items.map((item,i)=>`<button type="button" class="memory-cloud ${item.id===topic?.id?'selected':''}" data-cloud="${esc(item.id)}" style="--cloud-variant:${i%3}"><strong>${esc(item.name)}</strong><span>${project?'Topic':esc(names[item.theme_id])}</span></button>`).join(''):`<div class="empty">${project?'No topics yet. Create a topic to organise this project.':'No projects found. Create your first project to start connecting conversations.'}</div>`;
-    q('#memoryClouds').querySelectorAll('[data-cloud]').forEach(b=>b.onclick=()=>{if(project){topic=items.find(t=>t.id===b.dataset.cloud);memoryOffset=0;loadProject();}else{project=items.find(p=>p.id===b.dataset.cloud);topicOffset=0;memoryOffset=0;q('#memoryWorkspace').classList.remove('memory-detail-open');query='';q('#memorySearch').value='';loadProject();animate();}});
+    q('#memoryViewport').classList.toggle('is-list',view==='list');q('#memoryMapControls').hidden=view==='list'||!items.length;
+    q('#memoryClouds').innerHTML=items.length?items.map(item=>{const p=layout.find(p=>p.id===item.id);return `<button type="button" class="memory-cloud ${item.id===topic?.id?'selected':''}" data-cloud="${esc(item.id)}" title="${esc(item.name)}" data-theme="${esc(project?.theme_id||item.theme_id)}" aria-pressed="${item.id===topic?.id}" style="left:${p.x}px;top:${p.y}px;width:${p.width}px;height:${p.height}px"><strong>${esc(item.name)}</strong><span>${project?'Topic':esc(names[item.theme_id])}</span></button>`;}).join(''):`<div class="memory-map-empty"><h2>${query?'No matches':project?'Build this project’s memory':'Your memory space'}</h2><p>${query?'Try another search.':project?'Link a conversation to start collecting evidence. Topics can be added as you organise it.':'Create a project to connect your conversations.'}</p>${query?'':button(project?'Link a conversation':'Create project','data-empty-action')}</div>`;
+    if(view==='map'&&items.length)map.set(layout,key);else q('#memoryClouds').style.transform='none';
+    q('[data-empty-action]')?.addEventListener('click',()=>project?linkConversation():createProject());
+    if(project)q('#memoryPagination').replaceChildren();
+    q('#memoryClouds').querySelectorAll('[data-cloud]').forEach(b=>b.onclick=()=>{if(project){topic=items.find(t=>t.id===b.dataset.cloud);memoryOffset=0;loadProject(false,true);}else{project=items.find(p=>p.id===b.dataset.cloud);topic=null;openPane=false;memoryOffset=0;q('#memoryRail').hidden=true;q('#memoryWorkspace').classList.remove('memory-detail-open');query='';q('#memorySearch').value='';loadProject(false,false,true);}});
   }
-  async function loadProject(quiet=false){
+  async function loadProject(quiet=false,open=false,transition=false){
     clearTimeout(timer);const version=++request;
-    try{const data=await api(`/memories/projects/${project.id}?offset=${memoryOffset}${topic?'&topic_id='+topic.id:''}`);if(!active()||version!==request)return;detail=data;project={id:data.id,name:data.name,theme_id:data.theme_id};breadcrumbs();if(!quiet)drawClouds();q('#memorySearch').placeholder='Find a topic…';q('#memoryCreate').textContent='New topic';q('#memoryAsk').hidden=false;if(!quiet){drawManagement();showOverview(Boolean(topic));}
-      else {drawManagement();if(q('#memoryContent')?.dataset.screen==='overview')showOverview(false);}
+    try{const data=await api(`/memories/projects/${project.id}?offset=${memoryOffset}${topic?'&topic_id='+topic.id:''}`);if(!active()||version!==request)return;detail=data;project={id:data.id,name:data.name,theme_id:data.theme_id};breadcrumbs();if(!quiet)drawClouds();q('#memorySearch').placeholder='Find a topic…';q('#memoryCreate').textContent='New topic';q('#memoryAsk').hidden=false;if(!quiet){if(open){openPane=true;showOverview();}else if(openPane){if(paneScreen==='sources')showSources();else if(paneScreen==='review')showReview();else if(paneScreen==='overview')showOverview(false);}if(transition)animate();}
+      else if(openPane){if(paneScreen==='sources')drawManagement();else if(paneScreen==='overview')showOverview(false);}
       if(data.entries.some(e=>['queued','processing'].includes(e.memory_status)&&e.status!=='failed'))timer=setTimeout(()=>{if(active()&&project)loadProject(true);},5000);
     }catch(e){fail(e);}
   }
-  function reveal(label,screen){q('#memoryRail').hidden=false;q('#memoryScope').textContent=label;q('#memoryContent').dataset.screen=screen;q('#memoryWorkspace').classList.add('memory-detail-open');}
+  function reveal(label,screen){openPane=true;paneScreen=screen;q('#memoryManagement').hidden=screen!=='sources';q('#memoryContent').hidden=screen==='sources';host.querySelectorAll('[data-pane]').forEach(b=>b.setAttribute('aria-pressed',b.dataset.pane===(screen==='review'||screen==='history'?'overview':screen))); q('#memoryRail').hidden=false;q('#memoryScope').textContent=label;q('#memoryContent').dataset.screen=screen;q('#memoryWorkspace').classList.add('memory-detail-open');}
   function evidenceRows(evidence){return evidence.map(e=>`<blockquote class="quote">${esc(e.evidence)}<p class="helper">${esc(e.source_title)} · ${e.event_at?esc(new Date(e.event_at).toLocaleString()):'Event time unknown'}</p>${button('Open conversation',`data-source="${esc(e.source_entry_id)}"`)}</blockquote>`).join('');}
   function wireSources(){host.querySelectorAll('[data-source]').forEach(b=>b.onclick=()=>openEntry(b.dataset.source));}
   function showOverview(open=true){
-    q('#memoryRail').hidden=false;q('#memoryScope').textContent=topic?.name||project.name;q('#memoryContent').dataset.screen='overview';
-    if(open)reveal(topic?.name||project.name,'overview');
+    reveal(topic?.name||project.name,'overview');
+
     const expanded=[...q('#memoryContent').querySelectorAll('details[open]')].map(el=>el.id);
-    q('#memoryContent').innerHTML=`<h2>${esc(topic?.name||project.name)}</h2><p class="helper">Accepted memories · ${detail.proposal_count} suggestions awaiting review</p><div class="row">${button('Ask about this','data-ask-context')}${button('Review suggestions','data-review')}</div>${detail.memories.length?detail.memories.map(m=>`<article class="memory-fact"><span class="pill">${esc(m.kind)}</span> <span class="helper">${esc(m.certainty)}</span><p>${esc(m.text)}</p>${m.needs_review?'<p class="notice">Source changed or was unlinked. Excluded from answers until reviewed.</p>':''}<details id="evidence-${esc(m.id)}"><summary>Evidence</summary>${evidenceRows(m.evidence)}</details>${button('History',`data-history="${esc(m.id)}"`)}</article>`).join(''):'<p class="empty">No accepted memories yet. Link a conversation, then review its suggestions.</p>'}<div class="row">${memoryOffset?button('Previous memories','data-memory-prev'):''}${detail.has_more?button('More memories','data-memory-next'):''}</div>`;
+    q('#memoryContent').innerHTML=`<h2>${esc(topic?.name||project.name)}</h2><p class="helper">Accepted memories · ${detail.proposal_count} suggestions awaiting review</p><div class="row">${button('Ask about this','data-ask-context')}${detail.proposal_count?button('Review suggestions','data-review'):''}</div>${detail.memories.length?detail.memories.map(m=>`<article class="memory-fact"><span class="pill">${esc(m.kind)}</span> <span class="helper">${esc(m.certainty)}</span><p>${esc(m.text)}</p>${m.needs_review?'<p class="notice">Source changed or was unlinked. Excluded from answers until reviewed.</p>':''}<details id="evidence-${esc(m.id)}"><summary>Evidence</summary>${evidenceRows(m.evidence)}</details>${button('History',`data-history="${esc(m.id)}"`)}</article>`).join(''):'<p class="empty">No accepted memories yet. Open Sources to link a conversation, then review its suggestions.</p>'}<div class="row">${memoryOffset?button('Previous memories','data-memory-prev'):''}${detail.has_more?button('More memories','data-memory-next'):''}</div>`;
     expanded.forEach(id=>{const d=document.getElementById(id);if(d)d.open=true;});
-    q('[data-review]').onclick=showReview;q('[data-ask-context]').onclick=showAsk;
+    q('[data-review]')?.addEventListener('click',showReview);q('[data-ask-context]').onclick=showAsk;
     q('[data-memory-prev]')?.addEventListener('click',()=>{memoryOffset-=50;loadProject();});q('[data-memory-next]')?.addEventListener('click',()=>{memoryOffset+=50;loadProject();});
     host.querySelectorAll('[data-history]').forEach(b=>b.onclick=async()=>{try{const historyProject=project.id, historyRequest=request;const rows=await api(`/memories/projects/${historyProject}/memories/${b.dataset.history}/history`);if(!active()||project?.id!==historyProject||request!==historyRequest)return;reveal('Memory history','history');q('#memoryContent').innerHTML=`<h2>What changed</h2>${button('← Overview','data-overview')}${rows.map(r=>`<article class="memory-fact"><p class="helper">${esc(new Date(r.created_at).toLocaleString())}</p>${r.before?`<p>Before: ${esc(r.before.text)}</p>`:''}<p>After: ${esc(r.after.text)}</p><p class="helper">${esc(r.reason)}</p>${evidenceRows(r.after.evidence)}${r.id?button('Restore this version',`data-restore="${esc(r.id)}"`):''}</article>`).join('')}`;q('[data-overview]').onclick=()=>showOverview();
       host.querySelectorAll('[data-restore]').forEach(restore=>restore.onclick=()=>formDialog('Restore memory version','<label>Reason<input name="reason" required maxlength="2000"></label>',async form=>{
@@ -56,6 +70,7 @@ export function mountMemories(host, {api, esc, theme, openEntry, active}) {
         if(active())await loadProject();
       }));wireSources();}catch(e){fail(e);}});wireSources();
   }
+  function showSources(){reveal(topic?.name||project.name,'sources');drawManagement();}
   function drawManagement(){
     q('#memoryManagement').innerHTML=`<div class="row sectiongap">${button('Link a conversation','id="memoryLink"')}${button('Refresh','id="memoryRefresh"')}</div><h2>Linked conversations</h2>${detail.entries.length?detail.entries.map(e=>`<article class="memory-linked"><strong>${esc(e.title)}</strong><p class="helper">Conversation: ${esc(e.status)} · Memory suggestions: ${esc(e.memory_status)}${e.error?' · '+esc(e.error):''}</p><div class="row">${button('Open',`data-source="${esc(e.id)}"`)}${['completed','failed'].includes(e.memory_status)?button('Regenerate suggestions',`data-regenerate="${esc(e.id)}"`):''}${button('Unlink',`data-unlink="${esc(e.id)}"`)}</div></article>`).join(''):'<p class="helper">No linked conversations.</p>'}`;
     q('#memoryLink').onclick=linkConversation;q('#memoryRefresh').onclick=()=>loadProject();
@@ -86,6 +101,6 @@ export function mountMemories(host, {api, esc, theme, openEntry, active}) {
     q('#memoryQuestion').onsubmit=e=>{e.preventDefault();const form=new FormData(e.target),savedScope=scope;work(e.submitter,async()=>{q('#memoryAnswer').textContent='Looking through your accepted memories…';const result=await api(`/memories/projects/${savedScope.project_id}/ask`,{method:'POST',body:JSON.stringify({question:form.get('question'),topic_id:savedScope.topic_id,include_history:form.has('history')})});if(!active()||q('#memoryContent').dataset.screen!=='ask'||scope!==savedScope)return;answer=result;q('#memoryAnswer').innerHTML=result.status==='no_evidence'?'<p class="notice">No accepted memories support an answer yet. Link conversations and review suggestions first.</p>':`${result.pending_changes?'<p class="notice">This project has changes awaiting review. The answer reflects accepted memories.</p>':''}${result.claims.map(c=>`<p>${esc(c.text)}</p>`).join('')}<h3>Sources</h3>${result.sources.map(s=>`<details><summary>${esc(s.text)}</summary>${evidenceRows(s.evidence)}</details>`).join('')}`;wireSources();});};
   }
   loadProjects();
-  return ()=>{clearTimeout(timer);request++;captureCleanup();};
+  return ()=>{clearTimeout(timer);request++;map.dispose();captureCleanup();};
   function captureCleanup(){document.querySelectorAll('dialog[data-memory-dialog]').forEach(d=>d.close());}
 }
