@@ -10,7 +10,7 @@ const systemAppearance = matchMedia('(prefers-color-scheme: dark)');
 function applyAppearance() {
   const dark = appearance === 'dark' || (appearance === 'system' && systemAppearance.matches);
   document.documentElement.dataset.appearance = dark ? 'dark' : 'light';
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#111416' : '#f7f8fa');
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#191a1b' : '#faf9f6');
 }
 systemAppearance.addEventListener('change', applyAppearance);
 applyAppearance();
@@ -320,14 +320,29 @@ async function logout() {
   await auth.auth.signOut();
   await showAuth();
 }
-const navNames = {Actions:'To-dos', Capture:'Record', Memories:'Memories', Library:'Conversations'};
+const navNames = {Capture:'Record', Actions:'To-dos', Memories:'Memories', Library:'Conversations'};
+const screenTitles = {Capture:'Record a conversation',Actions:'To-dos',Library:'Conversations',Ask:'Ask your memory',Settings:'Settings',Memories:'Memories'};
+function closeAccount() { const menu=document.querySelector('#accountMenu'); if(menu)menu.hidden=true; document.querySelector('#accountToggle')?.setAttribute('aria-expanded','false'); }
+root.addEventListener('click',e=>{if(!e.target.closest('.account-dock'))closeAccount();});
+root.addEventListener('keydown',e=>{if(e.key==='Escape'&&!document.querySelector('#accountMenu')?.hidden){closeAccount();document.querySelector('#accountToggle')?.focus();}});
+function updateShellHeader() { document.querySelector('#pageTitle').textContent=screenTitles[screen]||'Memory'; document.querySelector('.main').dataset.screen=screen; document.querySelector('#theme').hidden=screen==='Settings'; root.querySelectorAll('[data-nav]').forEach(b=>{if(b.dataset.nav===(screen==='Ask'?'Library':screen))b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');}); }
 function navigate(next) {
   if (!leaveCapture()) return;
   screen = next; render();
 }
 function shell() {
-  root.innerHTML = `<div class="shell"><aside class="sidebar"><div class="brand"><img src="/ui/icon.svg" alt="">Memory</div><nav class="nav" aria-label="Main navigation">${Object.entries(navNames).filter(([id])=>id!=='Memories'||config.memories_enabled).map(([id,label])=>btn(`${icons[id]}<span>${label}</span>`,'',`data-nav="${id}"`)).join('')}</nav><footer><span class="helper">Your conversations. Your space.</span></footer></aside><main class="main">${config.environment && config.environment !== 'production' ? `<div class="env-banner">${esc(config.environment.toUpperCase())} · Test environment</div>` : ''}<header class="topbar"><span class="brand compact">Memory</span><div class="row"><select id="theme" aria-label="Current theme"><option value="">All themes</option>${Object.entries(names).map(([id,n])=>`<option value="${id}" ${theme===id?'selected':''}>${n}</option>`).join('')}</select>${btn(icons.Settings,'icon-button','id="settingsNav" aria-label="Settings"')}</div></header><div id="content"></div></main></div>`;
-  document.querySelector('#settingsNav').onclick = () => navigate('Settings');
+  const email=session.user.email||'';
+  const metadata=session.user.user_metadata||{};
+  const displayName=String(metadata.full_name||metadata.name||email.split('@')[0]||'Your account');
+  const initials=displayName.trim().split(/\s+/).slice(0,2).map(x=>x[0]||'').join('').toUpperCase();
+  const environment=config.environment&&config.environment!=='production'?`<span class="env-badge" aria-label="${esc(config.environment)} environment">${esc(config.environment==='development'?'DEV':config.environment.toUpperCase())}</span>`:'';
+  let collapsed=false;try{collapsed=localStorage.getItem('memory-sidebar-collapsed')==='true';}catch{}
+  root.innerHTML = `<div class="shell ${collapsed?'sidebar-collapsed':''}"><aside class="sidebar"><div class="brand-row"><div class="brand"><span class="brand-word">Memory</span>${environment}</div>${btn('‹','sidebar-toggle','id="sidebarToggle" aria-label="Toggle sidebar" aria-expanded="'+!collapsed+'"')}</div><nav class="nav" aria-label="Main navigation">${Object.entries(navNames).filter(([id])=>id!=='Memories'||config.memories_enabled).map(([id,label])=>btn(`${icons[id]}<span>${label}</span>`,'',`data-nav="${id}" aria-label="${label}" title="${label}"`)).join('')}</nav><footer class="account-dock"><div id="accountMenu" class="account-menu" hidden><div class="account-menu-identity"><strong>${esc(displayName)}</strong><span>${esc(email)}</span></div>${btn('Settings','','id="settingsNav"') }<label for="accountAppearance">Appearance</label><select id="accountAppearance">${['system','light','dark'].map(x=>`<option value="${x}" ${appearance===x?'selected':''}>${x[0].toUpperCase()+x.slice(1)}</option>`).join('')}</select>${btn('Sign out','','id="accountLogout"')}</div><button id="accountToggle" class="account-toggle" aria-expanded="false" aria-controls="accountMenu" aria-label="Open account menu"><span class="account-avatar">${esc(initials)}</span><span class="account-identity"><span>${esc(displayName)}</span><small>${esc(email)}</small></span><span class="account-chevron" aria-hidden="true">⌃</span></button></footer></aside><main class="main"><header class="topbar"><div class="page-heading"><h1 id="pageTitle"></h1><span class="mobile-environment">${environment}</span></div><select id="theme" aria-label="Current theme"><option value="">All themes</option>${Object.entries(names).map(([id,n])=>`<option value="${id}" ${theme===id?'selected':''}>${n}</option>`).join('')}</select></header><div id="content"></div></main></div>`;
+  document.querySelector('#settingsNav').onclick = () => {closeAccount();navigate('Settings');};
+  document.querySelector('#accountToggle').onclick=()=>{const menu=document.querySelector('#accountMenu');menu.hidden=!menu.hidden;document.querySelector('#accountToggle').setAttribute('aria-expanded',!menu.hidden);};
+  document.querySelector('#accountLogout').onclick=e=>safe(e.currentTarget,logout);
+  document.querySelector('#accountAppearance').onchange=e=>{appearance=e.target.value;try{localStorage.setItem('memory-appearance',appearance);}catch{}applyAppearance();const settings=document.querySelector('#appearance');if(settings)settings.value=appearance;};
+  document.querySelector('#sidebarToggle').onclick=()=>{const collapsed=document.querySelector('.shell').classList.toggle('sidebar-collapsed');document.querySelector('#sidebarToggle').setAttribute('aria-expanded',!collapsed);try{localStorage.setItem('memory-sidebar-collapsed',collapsed);}catch{}positionCaptureBar();};
   document.querySelector('#theme').onchange = e => {
     if (!leaveCapture()) { e.target.value = theme; return; }
     theme = e.target.value; render();
@@ -344,7 +359,8 @@ function render() {
     .forEach((b) => b.classList.toggle("active", b.dataset.nav === (screen === "Ask" ? "Library" : screen)));
   const area = document.querySelector("#content");
   delete area.dataset.entryId;
-  area.innerHTML = `<div class="intro"><h1>${{Capture:'Record a conversation',Actions:'To-dos',Library:'Conversations',Ask:'Ask your memory',Settings:'Settings',Memories:'Memories'}[screen]}</h1>${screen==='Actions'?btn('Record conversation','primary','id="quickRecord"'):''}</div>${['Library','Ask'].includes(screen)?`<div class="tabs">${btn('Conversations',screen==='Library'?'active':'','data-view="Library"')}${btn('Ask your memory',screen==='Ask'?'active':'','data-view="Ask"')}</div>`:''}<div id="panel"></div>`;
+  closeAccount();updateShellHeader();
+  area.innerHTML = `${screen==='Actions'?`<div class="page-actions">${btn('Record conversation','secondary','id="quickRecord"')}</div>`:''}${['Library','Ask'].includes(screen)?`<div class="tabs">${btn('Conversations',screen==='Library'?'active':'','data-view="Library"')}${btn('Ask your memory',screen==='Ask'?'active':'','data-view="Ask"')}</div>`:''}<div id="panel"></div>`;
   document.querySelector('#quickRecord')?.addEventListener('click',()=>navigate('Capture'));
   root.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>navigate(b.dataset.view));
   ({
@@ -649,6 +665,7 @@ async function openEntry(id) {
   memoryCleanup?.();memoryCleanup=null;
   clearTimeout(refreshTimer);
   screen = "Library";
+  updateShellHeader();
   root
     .querySelectorAll("[data-nav]")
     .forEach((b) => b.classList.toggle("active", b.dataset.nav === "Library"));
@@ -915,7 +932,7 @@ function languageControls(){return `<fieldset class="languages"><legend>Expected
 async function settingsScreen(version){
   const host=document.querySelector('#panel');
   host.innerHTML=`<section class="card appearance-card"><h2>Appearance</h2><label for="appearance">Colour mode</label><select id="appearance">${['system','light','dark'].map(x=>`<option value="${x}" ${appearance===x?'selected':''}>${x[0].toUpperCase()+x.slice(1)}</option>`).join('')}</select><div class="row spread sectiongap"><span class="helper">${esc(session.user.email)}</span>${btn('Sign out','link','id="logout"')}</div></section><details class="card"><summary>AI model defaults</summary><div id="aiPanel"><p role="status">Loading AI settings…</p></div></details>`;
-  document.querySelector('#appearance').onchange=e=>{appearance=e.target.value;try{localStorage.setItem('memory-appearance',appearance);}catch{}applyAppearance();};
+  document.querySelector('#appearance').onchange=e=>{appearance=e.target.value;try{localStorage.setItem('memory-appearance',appearance);}catch{}applyAppearance();const account=document.querySelector('#accountAppearance');if(account)account.value=appearance;};
   document.querySelector('#logout').onclick=logout;
   const panel=document.querySelector('#aiPanel');
   try{

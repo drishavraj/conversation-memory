@@ -45,7 +45,7 @@ const fs = require("fs");
     aud: "authenticated",
     role: "authenticated",
     app_metadata: {},
-    user_metadata: {},
+    user_metadata: {full_name: "Rishav Raj"},
   };
   await page.addInitScript(
     ({ token, user }) =>
@@ -99,7 +99,22 @@ const fs = require("fs");
   });
   await page.route('https://example.supabase.co/**',route=>route.fulfill({json:{user,all:[],totp:[],phone:[]}}));
   await page.goto((process.env.UI_BASE_URL||'http://localhost:8010')+'/');
+  await page.locator('#accountToggle').waitFor();
+  await page.locator('.account-identity').getByText('Rishav Raj',{exact:true}).waitFor();
+  await page.evaluate(()=>document.fonts.ready);
+  if(!await page.evaluate(()=>document.fonts.check('14px Inter')))throw Error('Bundled font unavailable');
+  await page.locator('#sidebarToggle').click();
+  if(!await page.locator('.shell').evaluate(el=>el.classList.contains('sidebar-collapsed')))throw Error('Sidebar did not collapse');
+  await page.locator('#accountToggle').click();
+  await page.locator('#accountMenu').getByText('rishav@example.com',{exact:true}).waitFor();
+  await page.locator('#accountAppearance').selectOption('dark');
+  if(await page.locator('html').getAttribute('data-appearance')!=='dark')throw Error('Account appearance failed');
+  await page.keyboard.press('Escape');
+  if(!await page.locator('#accountMenu').evaluate(el=>el.hidden))throw Error('Escape did not dismiss account menu');
+  await page.locator('#sidebarToggle').click();
+
   await page.locator('[data-nav="Memories"]').click();
+  if(await page.locator('#memorySearch').evaluate(el=>el.getBoundingClientRect().top)>160)throw Error('Workspace header too tall');
   await page.getByRole('button',{name:'New project',exact:true}).click();
   await page.getByLabel('Project name').fill('PNB Edge');
   await page.getByRole('dialog').getByLabel('Theme',{exact:true}).selectOption('office');
@@ -125,6 +140,11 @@ const fs = require("fs");
   await page.screenshot({path:'/tmp/memories-live-desktop.png',fullPage:true});
   for(const width of [390,320]){
     await page.setViewportSize({width,height:844});
+    await page.locator('#accountToggle').click();
+    if(!await page.locator('#accountMenu').evaluate(el=>{const b=el.getBoundingClientRect();return b.top>=0&&b.left>=0&&b.right<=innerWidth;}))throw Error('Mobile account menu clipped');
+    await page.locator('#accountMenu').getByRole('button',{name:'Sign out',exact:true}).waitFor();
+    await page.keyboard.press('Escape');
+
     await page.getByRole('button',{name:'← Back to map',exact:true}).click();
     await page.locator('[data-cloud="t1"]').click();
     await page.locator('.memory-fact').getByText('Start with a pilot.',{exact:true}).waitFor();
