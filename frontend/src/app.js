@@ -1,4 +1,5 @@
 import morphdom from "morphdom";
+import { processingSteps } from "./processing-progress.js";
 import { createClient } from "@supabase/supabase-js";
 const root = document.querySelector("#app");
 let appearance = 'system';
@@ -596,7 +597,7 @@ async function openEntry(id) {
       api("/entries/" + id + "/knowledge"),
     ]);
     if (version !== requestVersion) return;
-    updateContent(area, `${btn("← Conversations", "link", 'id="back"')}<div class="intro"><h1>${esc(entry.title)}</h1><div class="row">${badge(entry.theme_id)}<span class="pill ${esc(entry.status)}">${esc(entry.status)}</span><span class="meta">${date(entry.event_at || entry.uploaded_at)}</span></div></div>${entry.status === "failed" ? `<div class="error">Processing failed: ${esc(entry.job?.error || "Unknown error")}. ${btn("Retry processing", "secondary", 'id="retry"')}</div>` : ""}${["queued", "processing"].includes(entry.status) ? `<p class="notice" role="status"><span class="busy-spinner" aria-hidden="true"></span> ${entry.status === "queued" ? "Saved. Waiting to start processing…" : "Preparing your notes…"} ${entry.processing_config ? `${(entry.completed_stages || []).filter(t => t !== "answer").length} processing stages completed. ` : ""}You can leave this page; processing continues.</p>` : ""}${processingDetails(entry)}${knowledge.summary ? `<section class="card soft" id="entrySummary"><span class="eyebrow">The essentials</span><p>${esc(knowledge.summary)}</p></section>` : ""}${knowledge.items.length ? `<h2>What to remember</h2>${knowledge.items.map((item) => itemCard(item, true)).join("")}` : ""}<section class="card" id="entryOriginal"><h2>Original ${entry.input_type === "audio" ? "transcript" : "text"}</h2><p class="text">${esc(entry.original_text || "Available after processing.")}</p>${entry.input_type !== "text" ? btn("Download original file", "secondary", 'id="download"') : ""}</section>${knowledge.english_text ? `<section class="card" id="entryEnglish"><h2>English version</h2><p class="text">${esc(knowledge.english_text)}</p></section>` : ""}${entry.index_status === "failed" ? `<p class="notice">Semantic indexing failed. ${btn("Retry indexing", "secondary", 'id="indexRetry"')}</p>` : ""}`);
+    updateContent(area, `${btn("← Conversations", "link", 'id="back"')}<div class="intro"><h1>${esc(entry.title)}</h1><div class="row">${badge(entry.theme_id)}<span class="pill ${esc(entry.status)}">${esc(entry.status)}</span><span class="meta">${date(entry.event_at || entry.uploaded_at)}</span></div></div>${processingProgress(entry)}${processingDetails(entry)}${knowledge.summary ? `<section class="card soft" id="entrySummary"><span class="eyebrow">The essentials</span><p>${esc(knowledge.summary)}</p></section>` : ""}${knowledge.items.length ? `<h2>What to remember</h2>${knowledge.items.map((item) => itemCard(item, true)).join("")}` : ""}<section class="card" id="entryOriginal"><h2>Original ${entry.input_type === "audio" ? "transcript" : "text"}</h2><p class="text">${esc(entry.original_text || "Available after processing.")}</p>${entry.input_type !== "text" ? btn("Download original file", "secondary", 'id="download"') : ""}</section>${knowledge.english_text ? `<section class="card" id="entryEnglish"><h2>English version</h2><p class="text">${esc(knowledge.english_text)}</p></section>` : ""}${entry.index_status === "failed" ? `<p class="notice">Semantic indexing failed. ${btn("Retry indexing", "secondary", 'id="indexRetry"')}</p>` : ""}`);
     area.dataset.entryId = id;
     document.querySelector("#back").onclick = () => {
       screen = "Library";
@@ -863,11 +864,21 @@ async function settingsScreen(version){
     })};
   }catch(error){if(version===requestVersion)message(error.message)}
 }
+function processingProgress(entry) {
+  const steps = processingSteps(entry);
+  const ready = entry.status === 'ready';
+  const failed = entry.status === 'failed';
+  const states = {completed:'Completed', running:'In progress', waiting:'Waiting to resume', pending:'Upcoming', failed:'Needs retry'};
+  const rows = `<ol class="processing-steps">${steps.map((step,index)=>`<li id="progress-${esc(step.id)}" class="processing-step ${step.state}" ${step.state==='running'?'aria-current="step"':''}><span class="step-marker" aria-hidden="true">${step.state==='completed'?'✓':step.state==='running'?'<span class="busy-spinner"></span>':step.state==='failed'?'!':index+1}</span><div><div class="step-label">${esc(step.label)}</div><span class="helper">${states[step.state]}</span>${step.state==='failed'?`<p class="helper">Completed work is saved.</p>${btn('Retry processing','secondary','id="retry"')}`:''}</div></li>`).join('')}</ol>`;
+  if (ready) return `<p class="success" id="processingReady" role="status">✓ Conversation ready</p><details class="card" id="processingHistory"><summary>Processing history</summary>${rows}</details>`;
+  const title = failed ? 'Processing needs attention' : entry.status === 'queued' ? 'Saved · waiting to continue' : 'Preparing your conversation';
+  return `<section class="card processing-progress" id="processingProgress" aria-label="Conversation processing"><div role="status" aria-live="polite"><h2>${title}</h2><p class="helper">${steps.filter(s=>s.state==='completed').length} of ${steps.length} stages complete</p>${rows}</div>${failed?`<p class="error">${esc(entry.job?.error || 'Processing could not finish.')}</p>${steps.some(s=>s.state==='failed')?'':btn('Retry processing','secondary','id="retry"')}`:'<p class="helper">Your conversation is saved. You can leave this page while processing continues.</p>'}</section>`;
+}
 function processingDetails(entry){
   const config=entry.processing_config;
   if(!config)return '<p class="helper">This entry predates saved model selections.</p>';
   const completed=entry.completed_stages||[];
-  return `<details class="card" id="processingDetails"><summary>Processing details</summary><p class="helper">Choices saved when this entry was queued. A retry keeps these choices and completed stages.</p>${Object.entries(config.models).map(([task,choice])=>`<p><strong>${esc(taskNames[task]||task)}</strong><br>${esc(choice.provider)} / ${esc(choice.model)} <span class="pill">${completed.includes(task)?'Completed':'Not completed'}</span></p>`).join('')}<p class="helper">Expected languages: ${esc(config.languages?.join(', ')||'Automatic detection')}</p></details>`;
+  return `<details class="card" id="processingDetails"><summary>Models &amp; processing settings</summary><p class="helper">Choices saved when this entry was queued. A retry keeps these choices and completed stages.</p>${Object.entries(config.models).map(([task,choice])=>`<p><strong>${esc(taskNames[task]||task)}</strong><br>${esc(choice.provider)} / ${esc(choice.model)} <span class="pill">${completed.includes(task)?'Completed':'Not completed'}</span></p>`).join('')}<p class="helper">Expected languages: ${esc(config.languages?.join(', ')||'Automatic detection')}</p></details>`;
 }
 
 init();

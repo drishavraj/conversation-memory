@@ -561,3 +561,13 @@ summary:focus-visible {outline:3px solid #78a997;outline-offset:4px;border-radiu
 .save-progress progress { display:block; width:100%; height:.5rem; accent-color:var(--accent, #437c69); }
 @keyframes busy-spin { to { transform:rotate(360deg); } }
 @media (prefers-reduced-motion:reduce) { .busy-spinner { animation:none; border-style:dotted; } }
+
+.processing-steps { list-style:none; padding:0; margin:16px 0; }
+.processing-step { display:flex; gap:12px; padding:12px 0; align-items:flex-start; }
+.step-marker { flex:0 0 28px; width:28px; height:28px; display:grid; place-items:center; border-radius:50%; background:var(--soft); color:var(--muted); font-size:13px; }
+.processing-step .busy-spinner { margin:0; }
+.processing-step.running .step-label { font-weight:600; }
+.processing-step.running .step-marker,.processing-step.completed .step-marker { color:var(--green); }
+.processing-step.pending .step-label { color:var(--muted); }
+.processing-step.failed .step-marker { color:var(--text); outline:2px solid currentColor; }
+.processing-progress h2 { margin:0; }

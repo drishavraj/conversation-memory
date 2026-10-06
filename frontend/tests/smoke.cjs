@@ -121,6 +121,9 @@ const fs = require("fs");
       if (failUpload) { failUpload=false; return route.fulfill({status:503,json:{detail:'Test upload failure'}}); }
       uploadedOptions=true; data=entry;
     }
+    else if (url.pathname === '/api/entries/entry1/retry') {
+      entry.status='processing'; entry.job.error=null; data=entry;
+    }
     else if (url.pathname === "/api/session")
       data = { status: "authenticated" };
     else if (url.pathname === "/api/entries") data = [entry];
@@ -196,20 +199,31 @@ const fs = require("fs");
   await page.locator('[data-nav="Library"]').click();
   await page.getByRole("heading", { name: "Product review" }).waitFor();
   entry.status='processing';
+  entry.job={stage:'translation',attempts:1};
   entry.processing_config={models:{summary:{provider:'gemini',model:'test-model'}}};
   entry.completed_stages=[];
   await page.locator("[data-entry]").click();
   await page.getByRole("heading", { name: "Original text" }).waitFor();
   await page.locator('#processingDetails summary').click();
   await page.evaluate(()=>{window.originalSection=document.querySelector('#entryOriginal');window.processingDisclosure=document.querySelector('#processingDetails');});
-  entry.completed_stages=['summary'];
-  await page.getByText(/1 processing stages completed/).waitFor();
+  entry.completed_stages=['translation'];
+  entry.job.stage='summary';
+  await page.getByText('1 of 3 stages complete',{exact:true}).waitFor();
+  await page.locator('#progress-summary.running').waitFor();
   if(!await page.evaluate(()=>window.originalSection===document.querySelector('#entryOriginal') && window.processingDisclosure===document.querySelector('#processingDetails') && window.processingDisclosure.open))throw new Error('Polling replaced content or collapsed processing details');
+  entry.status='failed';
+  entry.job.error='provider_timeout';
+  await page.locator('#progress-summary.failed').waitFor();
+  await page.getByRole('button',{name:'Retry processing',exact:true}).click();
+  await page.locator('#progress-summary.running').waitFor();
+  if(await page.locator('#progress-translation.completed').count()!==1)throw new Error('Retry lost completed stage');
   entry.status='ready';
   await page.getByRole("button", { name: "Correct", exact: true }).click();
   await page.getByLabel("Reason for correction").fill("Clarify wording");
   await page.getByRole("button", { name: "Save correction" }).click();
   await page.locator("dialog").waitFor({ state: "detached" });
+  await page.getByText("✓ Conversation ready",{exact:true}).waitFor();
+  if(await page.locator("#processingHistory").evaluate(el=>el.open))throw new Error("Ready history should start collapsed");
   await page.locator('[data-nav="Library"]').click();
   await page.locator('[data-view="Ask"]').click();
   await page.getByLabel("Ask your memory").fill("What did I commit to?");
