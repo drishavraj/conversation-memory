@@ -1,3 +1,4 @@
+import morphdom from "morphdom";
 import { createClient } from "@supabase/supabase-js";
 const root = document.querySelector("#app");
 let appearance = 'system';
@@ -10,19 +11,21 @@ function applyAppearance() {
 }
 systemAppearance.addEventListener('change', applyAppearance);
 applyAppearance();
+let captureBusy = false;
 let previewURL, recordingPending = false, libraryQuery = '';
 function clearAudio() {
   if (previewURL) URL.revokeObjectURL(previewURL);
   previewURL = null; recordingFile = null;
 }
 function leaveCapture() {
+  if (captureBusy) { message("Please wait for your conversation to finish saving."); return false; }
   if (screen === 'Capture' && (recordingPending || recordingFile || recorder?.state === 'recording' || recorder?.state === 'paused')) {
     if (!confirm('Leave and discard this unsaved recording?')) return false;
   }
   stopRecording(); clearAudio(); return true;
 }
 window.addEventListener('beforeunload', e => {
-  if (recordingPending || recordingFile || recorder?.state === 'recording' || recorder?.state === 'paused') {
+  if (captureBusy || recordingPending || recordingFile || recorder?.state === 'recording' || recorder?.state === 'paused') {
     e.preventDefault(); e.returnValue = '';
   }
 });
@@ -85,6 +88,27 @@ function message(text, type = "error", target = root) {
   node.className = type;
   node.textContent = text;
 }
+// Reconcile refreshed data without discarding unchanged nodes or open disclosures.
+function updateContent(node, html) {
+  const next = node.cloneNode(false);
+  next.innerHTML = html;
+  morphdom(node, next, {
+    childrenOnly: true,
+    onBeforeElUpdated(from, to) {
+      if (from.tagName === 'DETAILS') to.open = from.open;
+      if (from.id === 'libraryQuery' || (from === document.activeElement && from.matches('input,textarea'))) {
+        to.value = from.value;
+      }
+      return !from.isEqualNode(to);
+    },
+  });
+}
+function savingProgress(percent) {
+  const host = document.querySelector('#captureResult');
+  if (!host) return;
+  const uploading = Number.isFinite(percent) && percent < 100;
+  host.innerHTML = `<div class="save-progress" role="status"><p>${uploading ? `Uploading… ${percent}%` : 'Saving your conversation…'}</p><progress aria-label="${uploading ? 'Upload progress' : 'Saving conversation'}" ${uploading ? `value="${percent}" max="100"` : ''}></progress><p class="helper">${percent === 100 ? 'Upload received. Waiting for the server to confirm.' : 'Keep this page open. Your notes will process automatically after saving.'}</p></div>`;
+}
 async function api(path, options = {}) {
   const { data, error } = await auth.auth.getSession();
   if (error || !data.session)
@@ -96,7 +120,17 @@ async function api(path, options = {}) {
   };
   if (options.body && !(options.body instanceof FormData))
     headers["Content-Type"] = "application/json";
-  const response = await fetch("/api" + path, { ...options, headers });
+  const { onUploadProgress, ...requestOptions } = options;
+  const response = onUploadProgress ? await new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(requestOptions.method || 'POST', '/api' + path);
+    Object.entries(headers).forEach(([key, value]) => xhr.setRequestHeader(key, value));
+    xhr.upload.onprogress = e => { if (e.lengthComputable) onUploadProgress(Math.round(e.loaded / e.total * 100)); };
+    xhr.onload = () => resolve({ ok: xhr.status >= 200 && xhr.status < 300, status: xhr.status, json: async () => JSON.parse(xhr.responseText) });
+    xhr.onerror = () => reject(new Error('Upload interrupted. Your file is still selected; please try again.'));
+    xhr.onabort = () => reject(new Error('Upload cancelled. Please try again.'));
+    xhr.send(requestOptions.body);
+  }) : await fetch("/api" + path, { ...requestOptions, headers });
   let body;
   try {
     body = await response.json();
@@ -121,13 +155,28 @@ async function api(path, options = {}) {
   return body;
 }
 async function safe(button, work) {
+  if (button.disabled) return;
+  const original = button.innerHTML;
+  const saving = button.id === 'saveCapture';
+  const row = button.closest('.todo-row');
+  if (row) row.inert = true;
   button.disabled = true;
+  button.setAttribute('aria-busy', 'true');
+  button.insertAdjacentHTML('afterbegin', '<span class="busy-spinner" aria-hidden="true"></span>');
+  const captureControls = saving ? [...document.querySelectorAll('#capture input, #capture select, #capture textarea, #record, #discardAudio')] : [];
+  const controlStates = captureControls.map(el => el.disabled);
+  if (saving) { captureBusy = true; savingProgress(); captureControls.forEach(el => el.disabled = true); }
   try {
     await work();
   } catch (e) {
     message(e.message);
   } finally {
     button.disabled = false;
+    if (button.hasAttribute('aria-busy')) button.innerHTML = original;
+    button.removeAttribute('aria-busy');
+    if (row) row.inert = false;
+    captureControls.forEach((el, index) => el.disabled = controlStates[index]);
+    if (saving) { captureBusy = false; document.querySelector('#captureResult .save-progress')?.remove(); }
   }
 }
 async function showAuth() {
@@ -286,6 +335,7 @@ function render() {
     .querySelectorAll("[data-nav]")
     .forEach((b) => b.classList.toggle("active", b.dataset.nav === (screen === "Ask" ? "Library" : screen)));
   const area = document.querySelector("#content");
+  delete area.dataset.entryId;
   area.innerHTML = `<div class="intro"><h1>${{Capture:'Record a conversation',Actions:'To-dos',Library:'Conversations',Ask:'Ask your memory',Settings:'Settings'}[screen]}</h1>${screen==='Actions'?btn('Record conversation','primary','id="quickRecord"'):''}</div>${['Library','Ask'].includes(screen)?`<div class="tabs">${btn('Conversations',screen==='Library'?'active':'','data-view="Library"')}${btn('Ask your memory',screen==='Ask'?'active':'','data-view="Ask"')}</div>`:''}<div id="panel"></div>`;
   document.querySelector('#quickRecord')?.addEventListener('click',()=>navigate('Capture'));
   root.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>navigate(b.dataset.view));
@@ -376,7 +426,7 @@ function capture() {
         data.set("title", title);
         data.set("theme_id", theme_id);
         data.set("event_at", event_at);
-        entry = await api("/entries/upload", { method: "POST", body: data });
+        entry = await api("/entries/upload", { method: "POST", body: data, onUploadProgress: savingProgress });
       }
       if (captureVersion !== requestVersion) return;
       document.querySelector("#captureResult").innerHTML =
@@ -495,16 +545,21 @@ function sourceDialog(source) {
   };
   dialog.showModal();
 }
+function onClick(selector, handler) {
+  const node = document.querySelector(selector);
+  if (node) node.onclick = handler;
+}
 function scope() {
   return theme ? "&theme_id=" + encodeURIComponent(theme) : "";
 }
 async function library(version, offset = 0) {
   const panel = document.querySelector("#panel");
-  panel.innerHTML = '<p class="muted" role="status">Loading your entries…</p>';
+  clearTimeout(refreshTimer);
+  if (!panel.children.length) panel.innerHTML = '<p class="muted" role="status">Loading your entries…</p>';
   try {
     const rows = await api(`/entries?limit=20&offset=${offset}&q=${encodeURIComponent(libraryQuery)}${scope()}`);
     if (version !== requestVersion) return;
-    panel.innerHTML = `<form id="conversationSearch" class="row library-search"><input id="libraryQuery" type="search" aria-label="Search conversations" placeholder="Search titles and transcripts" maxlength="200" value="${esc(libraryQuery)}">${btn("Search","secondary")}</form><div class="row spread" style="margin-bottom:18px"><span class="helper">${esc(theme ? names[theme] : "All themes")} · Page ${offset / 20 + 1}</span>${btn("Refresh", "secondary", 'id="refresh"')}</div>${rows.length ? rows.map((r) => `<button class="entry" data-entry="${esc(r.id)}"><div class="row spread">${badge(r.theme_id)}<span class="pill ${esc(r.status)}">${esc(r.status)}</span></div><h3>${esc(r.title)}</h3><p class="meta">${esc(r.input_type || "text")} · ${date(r.event_at || r.uploaded_at)}</p><p class="muted">${esc((r.original_text || "").slice(0, 150))}${(r.original_text || "").length > 150 ? "…" : ""}</p></button>`).join("") : '<div class="card empty">Nothing saved here yet. Capture a conversation to start your memory.</div>'}<div class="row">${offset ? btn("Previous", "secondary", 'id="prev"') : ""}${rows.length === 20 ? btn("Next page", "secondary", 'id="next"') : ""}</div>`;
+    updateContent(panel, `<form id="conversationSearch" class="row library-search"><input id="libraryQuery" type="search" aria-label="Search conversations" placeholder="Search titles and transcripts" maxlength="200" value="${esc(libraryQuery)}">${btn("Search","secondary")}</form><div class="row spread" style="margin-bottom:18px"><span class="helper">${esc(theme ? names[theme] : "All themes")} · Page ${offset / 20 + 1}</span>${btn("Refresh", "secondary", 'id="refresh"')}</div>${rows.length ? rows.map((r) => `<button class="entry" data-entry="${esc(r.id)}"><div class="row spread">${badge(r.theme_id)}<span class="pill ${esc(r.status)}">${esc(r.status)}</span></div><h3>${esc(r.title)}</h3><p class="meta">${esc(r.input_type || "text")} · ${date(r.event_at || r.uploaded_at)}</p><p class="muted">${esc((r.original_text || "").slice(0, 150))}${(r.original_text || "").length > 150 ? "…" : ""}</p></button>`).join("") : '<div class="card empty">Nothing saved here yet. Capture a conversation to start your memory.</div>'}<div class="row">${offset ? btn("Previous", "secondary", 'id="prev"') : ""}${rows.length === 20 ? btn("Next page", "secondary", 'id="next"') : ""}</div>`);
     panel
       .querySelectorAll("[data-entry]")
       .forEach((b) => (b.onclick = () => openEntry(b.dataset.entry)));
@@ -532,31 +587,34 @@ async function openEntry(id) {
     .forEach((b) => b.classList.toggle("active", b.dataset.nav === "Library"));
   const version = ++requestVersion,
     area = document.querySelector("#content");
-  area.innerHTML = '<p class="muted" role="status">Opening entry…</p>';
+  if (area.dataset.entryId !== id) {
+    area.insertAdjacentHTML('beforeend', '<p id="openingEntry" class="muted" role="status">Opening entry…</p>');
+  }
   try {
     const [entry, knowledge] = await Promise.all([
       api("/entries/" + id),
       api("/entries/" + id + "/knowledge"),
     ]);
     if (version !== requestVersion) return;
-    area.innerHTML = `${btn("← Conversations", "link", 'id="back"')}<div class="intro"><h1>${esc(entry.title)}</h1><div class="row">${badge(entry.theme_id)}<span class="pill ${esc(entry.status)}">${esc(entry.status)}</span><span class="meta">${date(entry.event_at || entry.uploaded_at)}</span></div></div>${entry.status === "failed" ? `<div class="error">Processing failed: ${esc(entry.job?.error || "Unknown error")}. ${btn("Retry processing", "secondary", 'id="retry"')}</div>` : ""}${["queued", "processing"].includes(entry.status) ? `<p class="notice" role="status">Preparing your notes… This page updates automatically.</p>` : ""}${processingDetails(entry)}${knowledge.summary ? `<section class="card soft"><span class="eyebrow">The essentials</span><p>${esc(knowledge.summary)}</p></section>` : ""}${knowledge.items.length ? `<h2>What to remember</h2>${knowledge.items.map((item) => itemCard(item, true)).join("")}` : ""}<section class="card"><h2>Original ${entry.input_type === "audio" ? "transcript" : "text"}</h2><p class="text">${esc(entry.original_text || "Available after processing.")}</p>${entry.input_type !== "text" ? btn("Download original file", "secondary", 'id="download"') : ""}</section>${knowledge.english_text ? `<section class="card"><h2>English version</h2><p class="text">${esc(knowledge.english_text)}</p></section>` : ""}${entry.index_status === "failed" ? `<p class="notice">Semantic indexing failed. ${btn("Retry indexing", "secondary", 'id="indexRetry"')}</p>` : ""}`;
+    updateContent(area, `${btn("← Conversations", "link", 'id="back"')}<div class="intro"><h1>${esc(entry.title)}</h1><div class="row">${badge(entry.theme_id)}<span class="pill ${esc(entry.status)}">${esc(entry.status)}</span><span class="meta">${date(entry.event_at || entry.uploaded_at)}</span></div></div>${entry.status === "failed" ? `<div class="error">Processing failed: ${esc(entry.job?.error || "Unknown error")}. ${btn("Retry processing", "secondary", 'id="retry"')}</div>` : ""}${["queued", "processing"].includes(entry.status) ? `<p class="notice" role="status"><span class="busy-spinner" aria-hidden="true"></span> ${entry.status === "queued" ? "Saved. Waiting to start processing…" : "Preparing your notes…"} ${entry.processing_config ? `${(entry.completed_stages || []).filter(t => t !== "answer").length} processing stages completed. ` : ""}You can leave this page; processing continues.</p>` : ""}${processingDetails(entry)}${knowledge.summary ? `<section class="card soft" id="entrySummary"><span class="eyebrow">The essentials</span><p>${esc(knowledge.summary)}</p></section>` : ""}${knowledge.items.length ? `<h2>What to remember</h2>${knowledge.items.map((item) => itemCard(item, true)).join("")}` : ""}<section class="card" id="entryOriginal"><h2>Original ${entry.input_type === "audio" ? "transcript" : "text"}</h2><p class="text">${esc(entry.original_text || "Available after processing.")}</p>${entry.input_type !== "text" ? btn("Download original file", "secondary", 'id="download"') : ""}</section>${knowledge.english_text ? `<section class="card" id="entryEnglish"><h2>English version</h2><p class="text">${esc(knowledge.english_text)}</p></section>` : ""}${entry.index_status === "failed" ? `<p class="notice">Semantic indexing failed. ${btn("Retry indexing", "secondary", 'id="indexRetry"')}</p>` : ""}`);
+    area.dataset.entryId = id;
     document.querySelector("#back").onclick = () => {
       screen = "Library";
       render();
     };
-    document.querySelector("#retry")?.addEventListener("click", (e) =>
+    onClick("#retry", (e) =>
       safe(e.target, async () => {
         await api(`/entries/${id}/retry`, { method: "POST" });
         openEntry(id);
       }),
     );
-    document.querySelector("#indexRetry")?.addEventListener("click", (e) =>
+    onClick("#indexRetry", (e) =>
       safe(e.target, async () => {
         await api(`/entries/${id}/index/retry`, { method: "POST" });
         openEntry(id);
       }),
     );
-    document.querySelector("#download")?.addEventListener("click", (e) =>
+    onClick("#download", (e) =>
       safe(e.target, async () => {
         const { data } = await auth.auth.getSession();
         const r = await fetch(`/api/entries/${id}/file`, {
@@ -592,13 +650,14 @@ function due(item) {
   return `Due ${formatted}`;
 }
 function itemCard(item, edit = false) {
-  return `<article class="card"><div class="row spread"><div class="row">${badge(item.theme_id)}<span class="pill">${esc(item.kind)}</span>${item.certainty === "tentative" ? '<span class="pill tentative">Tentative</span>' : ""}</div><span class="meta">${esc(item.status)}</span></div><h3 class="sectiongap">${esc(item.text)}</h3><p class="meta">${esc(item.owner || "Owner unspecified")} · ${due(item)}</p><blockquote class="quote">${esc(item.evidence)}</blockquote><div class="row">${item.kind === "action" && item.status === "active" ? btn("Mark complete", "secondary", `data-status="completed" data-item="${esc(item.id)}"`) + btn("Dismiss", "link", `data-status="dismissed" data-item="${esc(item.id)}"`) : ""}${item.kind === "action" && item.status !== "active" ? btn("Reopen", "secondary", `data-status="active" data-item="${esc(item.id)}"`) : ""}${edit ? btn("Correct", "link", `data-edit="${esc(item.id)}"`) : btn("Open source", "link", `data-entry="${esc(item.source_entry_id)}"`)}</div></article>`;
+  return `<article class="card" id="item-${esc(item.id)}"><div class="row spread"><div class="row">${badge(item.theme_id)}<span class="pill">${esc(item.kind)}</span>${item.certainty === "tentative" ? '<span class="pill tentative">Tentative</span>' : ""}</div><span class="meta">${esc(item.status)}</span></div><h3 class="sectiongap">${esc(item.text)}</h3><p class="meta">${esc(item.owner || "Owner unspecified")} · ${due(item)}</p><blockquote class="quote">${esc(item.evidence)}</blockquote><div class="row">${item.kind === "action" && item.status === "active" ? btn("Mark complete", "secondary", `data-status="completed" data-item="${esc(item.id)}"`) + btn("Dismiss", "link", `data-status="dismissed" data-item="${esc(item.id)}"`) : ""}${item.kind === "action" && item.status !== "active" ? btn("Reopen", "secondary", `data-status="active" data-item="${esc(item.id)}"`) : ""}${edit ? btn("Correct", "link", `data-edit="${esc(item.id)}"`) : btn("Open source", "link", `data-entry="${esc(item.source_entry_id)}"`)}</div></article>`;
 }
 function wireItems(items, reload) {
   root.querySelectorAll("[data-status]").forEach(
     (b) =>
       (b.onclick = () =>
         safe(b, async () => {
+          const version = requestVersion;
           const item = items.find((x) => x.id === b.dataset.item);
           await api("/knowledge/" + item.id, {
             method: "PATCH",
@@ -608,7 +667,7 @@ function wireItems(items, reload) {
               status: b.dataset.status,
             }),
           });
-          await reload();
+          if (version === requestVersion) await reload();
         })),
   );
   root.querySelectorAll("[data-edit]").forEach(
@@ -624,7 +683,7 @@ function wireItems(items, reload) {
     .forEach((b) => (b.onclick = () => openEntry(b.dataset.entry)));
 }
 async function actions(version) {
-  document.querySelector("#panel").innerHTML =
+  if (!document.querySelector("#actionRows")) document.querySelector("#panel").innerHTML =
     `<div class="tabs">${["active", "completed", "dismissed"].map((s) => btn(s[0].toUpperCase() + s.slice(1), actionStatus === s ? "active" : "", `data-filter="${s}"`)).join("")}</div><div id="actionRows" role="status">Loading to-dos…</div><div id="attentionRows"></div>`;
   document.querySelectorAll("[data-filter]").forEach(
     (b) =>
@@ -646,7 +705,7 @@ async function actions(version) {
       ['No date',items.filter(i=>i.certainty!=='tentative' && !i.due_date)],
       ['Tentative · needs confirmation',items.filter(i=>i.certainty==='tentative')]
     ] : [[actionStatus==='completed'?'Completed':'Dismissed',items]];
-    document.querySelector('#actionRows').innerHTML=items.length?groups.filter(([,rows])=>rows.length).map(([label,rows])=>`<section class="todo-group"><h2>${label}<span class="count">${rows.length}</span></h2>${rows.sort((a,b)=>(a.due_date||'').localeCompare(b.due_date||'')).map(i=>`<article class="todo-row">${btn(i.status==='active'?'○':'✓','check-button',`data-status="${i.status==='active'?'completed':'active'}" data-item="${esc(i.id)}" aria-label="${i.status==='active'?'Complete':'Reopen'}: ${esc(i.text)}"`)}<details><summary>${esc(i.text)}<span class="todo-meta">${badge(i.theme_id)}<span class="${i.due_date && i.due_date<today && i.status==='active'?'overdue':''}">${esc(due(i))}</span>${i.owner?`<span>${esc(i.owner)}</span>`:''}</span></summary><blockquote class="quote">${esc(i.evidence)}</blockquote><div class="row">${btn('Open conversation','link',`data-entry="${esc(i.source_entry_id)}"`)}${btn('Correct','link',`data-edit="${esc(i.id)}"`)}${i.status==='active'?btn('Dismiss','link',`data-status="dismissed" data-item="${esc(i.id)}"`):''}</div></details></article>`).join('')}</section>`).join(''):'<div class="empty">No '+actionStatus+' to-dos here.</div>';
+    updateContent(document.querySelector('#actionRows'), items.length?groups.filter(([,rows])=>rows.length).map(([label,rows])=>`<section class="todo-group"><h2>${label}<span class="count">${rows.length}</span></h2>${rows.sort((a,b)=>(a.due_date||'').localeCompare(b.due_date||'')).map(i=>`<article class="todo-row" id="todo-${esc(i.id)}">${btn(i.status==='active'?'○':'✓','check-button',`data-status="${i.status==='active'?'completed':'active'}" data-item="${esc(i.id)}" aria-label="${i.status==='active'?'Complete':'Reopen'}: ${esc(i.text)}"`)}<details><summary>${esc(i.text)}<span class="todo-meta">${badge(i.theme_id)}<span class="${i.due_date && i.due_date<today && i.status==='active'?'overdue':''}">${esc(due(i))}</span>${i.owner?`<span>${esc(i.owner)}</span>`:''}</span></summary><blockquote class="quote">${esc(i.evidence)}</blockquote><div class="row">${btn('Open conversation','link',`data-entry="${esc(i.source_entry_id)}"`)}${btn('Correct','link',`data-edit="${esc(i.id)}"`)}${i.status==='active'?btn('Dismiss','link',`data-status="dismissed" data-item="${esc(i.id)}"`):''}</div></details></article>`).join('')}</section>`).join(''):'<div class="empty">No '+actionStatus+' to-dos here.</div>');
     if (items.length === 100)
       document
         .querySelector("#actionRows")
@@ -808,7 +867,7 @@ function processingDetails(entry){
   const config=entry.processing_config;
   if(!config)return '<p class="helper">This entry predates saved model selections.</p>';
   const completed=entry.completed_stages||[];
-  return `<details class="card"><summary>Processing details</summary><p class="helper">Choices saved when this entry was queued. A retry keeps these choices and completed stages.</p>${Object.entries(config.models).map(([task,choice])=>`<p><strong>${esc(taskNames[task]||task)}</strong><br>${esc(choice.provider)} / ${esc(choice.model)} <span class="pill">${completed.includes(task)?'Completed':'Not completed'}</span></p>`).join('')}<p class="helper">Expected languages: ${esc(config.languages?.join(', ')||'Automatic detection')}</p></details>`;
+  return `<details class="card" id="processingDetails"><summary>Processing details</summary><p class="helper">Choices saved when this entry was queued. A retry keeps these choices and completed stages.</p>${Object.entries(config.models).map(([task,choice])=>`<p><strong>${esc(taskNames[task]||task)}</strong><br>${esc(choice.provider)} / ${esc(choice.model)} <span class="pill">${completed.includes(task)?'Completed':'Not completed'}</span></p>`).join('')}<p class="helper">Expected languages: ${esc(config.languages?.join(', ')||'Automatic detection')}</p></details>`;
 }
 
 init();

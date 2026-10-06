@@ -7,7 +7,8 @@
     "build": "node build.mjs"
   },
   "dependencies": {
-    "@supabase/supabase-js": "2.57.4"
+    "@supabase/supabase-js": "2.57.4",
+    "morphdom": "2.7.4"
   },
   "devDependencies": {
     "esbuild": "0.25.10",
